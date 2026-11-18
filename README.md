@@ -6,7 +6,8 @@
 ![FastEmbed](https://img.shields.io/badge/embeddings-FastEmbed%20ONNX-FF6F00)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu-844FBA?logo=opentofu&logoColor=white)
 ![OCI](https://img.shields.io/badge/certified%20on-OCI%20Ampere%20ARM-F80000?logo=oracle&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-7%20%C2%B7%20audited%20%26%20documented-blue)
+![Stage](https://img.shields.io/badge/release-v1.0.0-blue)
+![Stage](https://img.shields.io/badge/stage-8%20%C2%B7%20released-blue)
 ![Audit](https://img.shields.io/badge/portability-PORTABLE__CERTIFIED%20100%2F100-brightgreen)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
@@ -400,6 +401,7 @@ docs/                       per-stage verification evidence and reports
 | 5 | Live OCI deployment and verification | Done — `docs/stage-5-verification.txt` |
 | 6 | Scale-out: sharding, snapshot/restore drill, monitoring, load test | Not started |
 | 7 | Security audit, documentation, cost estimation | Done — `docs/stage-7-security-audit.txt`, this README |
+| 8 | Release packaging: license, clean tree, `v1.0.0` tag, public repository | Done — tag `v1.0.0` |
 
 ## ⚠️ Honest limits
 
