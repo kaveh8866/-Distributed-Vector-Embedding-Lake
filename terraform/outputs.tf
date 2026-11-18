@@ -120,8 +120,8 @@ output "deploy_next_step" {
   value       = <<-EOT
     1. ssh ubuntu@${module.compute.public_ip}
     2. df -h ${module.storage.mount_point}          # confirm the data volume is mounted
-    3. git clone https://github.com/kaveh8866/-Distributed-Vector-Embedding-Lake.git
-    4. cd -- -Distributed-Vector-Embedding-Lake 2>/dev/null || cd Distributed-Vector-Embedding-Lake
+    3. git clone https://github.com/kaveh8866/-Distributed-Vector-Embedding-Lake.git vector-lake
+    4. cd vector-lake
     5. cp .env.example .env                          # set VECTOR_STORAGE_DIR to the mount path
     6. docker compose --env-file .env -f docker/docker-compose.yml up -d --build
   EOT

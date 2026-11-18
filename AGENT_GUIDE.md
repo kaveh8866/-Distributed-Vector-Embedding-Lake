@@ -1,71 +1,105 @@
 # Agent Guide — Distributed Vector & Embedding Lake
 
-This is the operating contract for an engineer or agent picking up the
-repository. It states how to run the stack, where boundaries are, and what is
-verified versus assumed.
+Operating contract for an AI coding agent (Cursor, Claude Code, Windsurf, or a
+terminal agent) picking up this repository. It states what to run, in what
+order, what healthy looks like, and what is verified versus assumed.
 
-## 1. What this project is
+> **Read section 13 before making any availability or certification claim.** The
+> stack runs locally today; the OCI certification run is Stage 4 and has not
+> happened yet.
+
+## 1. Current state
+
+| Layer | Status | Evidence |
+| --- | --- | --- |
+| Container topology, worker, API, evaluation | Verified locally | `docs/stage-1-verification.txt` (20 unit tests, live Qdrant, recall@5 0.875) |
+| OCI infrastructure modules | Authored and validated, **not applied** | `docs/stage-2-verification.txt` (`tofu validate`, plan: 8 to add) |
+| Live OCI deployment | **Pending** | none — do not claim it |
+
+The local stack was stopped after verification. `storage/` (vector segments) is
+retained on the workstation and gitignored. No OCI resource exists.
+
+## 2. What this project is
 
 A Qdrant-backed vector and embedding lake for large-scale RAG:
 
-- `ingest-worker` converts a JSONL corpus into chunks, embeddings and Qdrant
-  points.
+- `ingest-worker` converts a JSONL corpus into chunks, embeddings and points.
 - `search-api` embeds a query and returns nearest chunks with payloads.
-- `vlake.evaluation` measures recall@k and MRR against a labelled query set.
+- `vlake.evaluation` reports recall@k and MRR against a labelled query set.
 
 One image (`docker/worker/Dockerfile`) serves the worker and the API. Qdrant is
 the only stateful service.
 
-## 2. Repository boundaries
+```
+JSONL corpus → ingest-worker → chunk → embed → upsert → Qdrant (segments, WAL, snapshots)
+RAG client  → POST /search  → search-api → embed → query_points → hits + payloads
+```
 
-Never commit:
+## 3. Repository map
 
-| Pattern | Reason |
+| Path | Contents |
 | --- | --- |
-| `.env`, `.env.*` except `.env.example` | endpoints, API keys |
-| `storage/`, `snapshots/`, `*.snapshot`, `*.db`, `*.sqlite*` | vector data and payloads |
-| `data/`, `datasets/raw/`, `datasets/private/` | non-synthetic corpora |
-| `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*` | private keys |
-| `*.tfstate*`, `*.tfvars`, `terraform.tfvars` | tenancy/compartment identifiers |
-| `logs/`, `*.log` | may contain corpus excerpts and endpoints |
+| `docker/docker-compose.yml` | Canonical three-service topology, limits, hardening |
+| `docker-compose.yml` (root) | `extends` entrypoint for discovery and audit |
+| `docker/qdrant/config.yaml` | Storage paths, listeners, payload-on-disk, telemetry off |
+| `docker/worker/Dockerfile` | Shared worker/API image, uid 10001 |
+| `src/vlake/config.py` | Env + YAML settings, validation |
+| `src/vlake/embeddings.py` | `hashing` and `sentence-transformers` providers |
+| `src/vlake/ingestion.py` | Chunking, batching, upsert, CLI |
+| `src/vlake/search.py` | FastAPI `/health` `/ready` `/search` |
+| `src/vlake/evaluation.py` | recall@k / MRR loop |
+| `configs/vector_db.yaml` | Collection shape, HNSW, quantization |
+| `configs/embedding_models.yaml` | Providers, dimensions, chunking rationale |
+| `configs/datasets/` | Synthetic corpus + labelled queries (tracked) |
+| `terraform/` | OCI VCN, A1.Flex instance, block volume, cloud-init (Stage 2) |
+| `MANUAL_PREREQS.md` | Human operator checklist: credentials, storage, models, `.env` |
+| `tests/test_pipeline.py` | 20 dependency-free unit tests |
 
-Rules:
+## 4. Agent preflight (run before touching anything)
 
-- Verify with `git check-ignore -v <path>` and `git status --porcelain`, never
-  by eye.
-- `configs/datasets/*.jsonl` is synthetic and intentionally tracked. Private
-  corpora go to `data/` and stay untracked.
-- Local authority: `.env` and `terraform/terraform.tfvars` may be read to run
-  the stack or `tofu apply`. Never print, copy or commit their values.
+```bash
+git status --porcelain                  # must be empty before you start
+git log --oneline -3                    # know the baseline
+docker version --format '{{.Server.Version}}'
+docker compose version
+python -m unittest discover -s tests -q
+```
 
-## 3. Local workflow
+If the tree is dirty, stop and report it. Do not "clean up" someone else's work.
+
+## 5. Local bring-up playbook
 
 ```bash
 cp .env.example .env
 mkdir -p storage/qdrant storage/snapshots
-
 docker compose --env-file .env -f docker/docker-compose.yml config -q
-docker compose --env-file .env -f docker/docker-compose.yml up -d qdrant
-docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
-docker compose --env-file .env -f docker/docker-compose.yml up -d search-api
 
+# 1. database
+docker compose --env-file .env -f docker/docker-compose.yml up -d qdrant
+docker inspect -f '{{.State.Health.Status}}' cg-vector-qdrant   # healthy
+
+# 2. ingestion (one-shot; creates the collection on first run)
+docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
+
+# 3. retrieval API
+docker compose --env-file .env -f docker/docker-compose.yml up -d search-api
 curl -s http://127.0.0.1:8085/health
 curl -s http://127.0.0.1:8085/ready
-curl -s http://127.0.0.1:8085/search \
-  -H 'content-type: application/json' \
-  -d '{"query": "chunk size and overlap", "limit": 3}'
 ```
 
-Stop and remove everything local:
+Expected: `{"status":"ok",...}` then `{"status":"ready","collection":"rag_documents"}`.
+The worker prints a JSON summary; `points_written` must equal `chunks`.
+
+Stop without losing vectors:
 
 ```bash
 docker compose --env-file .env -f docker/docker-compose.yml down
 ```
 
-That removes containers and the bridge network; `storage/` on the host keeps
-the vectors. Delete `storage/` only when the corpus should be lost.
+That removes containers and the bridge network only. Delete `storage/` solely
+when the corpus is meant to be destroyed.
 
-### Code checks without Docker
+### Code checks that need no Docker
 
 ```bash
 python -m unittest discover -s tests -v
@@ -74,52 +108,232 @@ PYTHONPATH=src python -m vlake.ingestion --dry-run \
 python -m compileall -q src tests
 ```
 
-## 4. Configuration rules
+`--dry-run` loads, validates and chunks the corpus without Qdrant or a model.
 
-- `VECTOR_SIZE` must equal the collection `vector_size` and the embedding model
-  dimension. A mismatch is a startup error, not a warning.
+## 6. Persistent storage playbook
+
+Two environments, one contract: Qdrant writes to the paths in
+`VECTOR_STORAGE_DIR` and `VECTOR_SNAPSHOT_DIR`.
+
+**Workstation (default).** Relative paths from `docker/`:
+
+```bash
+VECTOR_STORAGE_DIR=../storage/qdrant
+VECTOR_SNAPSHOT_DIR=../storage/snapshots
+```
+
+Both are gitignored. Verify:
+
+```bash
+du -sh storage/qdrant
+ls storage/qdrant/collections
+```
+
+**OCI host (Stage 4).** The Terraform block volume is mounted at
+`/mnt/vector-lake`. Use absolute paths in `.env`, or the containers will write
+to the boot disk and the data will not survive instance replacement:
+
+```bash
+VECTOR_STORAGE_DIR=/mnt/vector-lake/storage/qdrant
+VECTOR_SNAPSHOT_DIR=/mnt/vector-lake/storage/snapshots
+```
+
+Verify the mount before starting containers:
+
+```bash
+df -h /mnt/vector-lake
+lsblk -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT
+systemctl status vector-lake-mount --no-pager
+```
+
+A healthy host shows the volume on `/mnt/vector-lake`, ext4 label `vectorlake`,
+and `active (exited)` for the mount unit. If the mount is missing, stop: do not
+ingest into a boot-disk directory that will be lost.
+
+## 7. Ingestion playbook
+
+```bash
+# plan only
+docker compose --env-file .env -f docker/docker-compose.yml run --rm \
+  --entrypoint python ingest-worker -m vlake.ingestion \
+  --dataset configs/datasets/sample_documents.jsonl --dry-run
+
+# real ingest
+docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
+
+# rebuild the collection from scratch (DESTRUCTIVE: drops all points)
+docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker --recreate
+```
+
+Rules:
+
+- Point IDs are UUIDv5 of `document-id::chunk-index`, so a re-run overwrites
+  rather than duplicates. Confirm with `collection_points` staying constant.
+- `--recreate` drops the collection. State that intent in the response before
+  running it, and never use it on a corpus you did not just rebuild.
+- A custom corpus must be JSONL with `id` and `text` per line and no duplicate
+  IDs. Put private corpora under `data/` (gitignored), never in
+  `configs/datasets/`.
+- Chunking is character-based (`CHUNK_SIZE`, `CHUNK_OVERLAP`) with whitespace
+  boundaries. Changing it changes point IDs and requires `--recreate` to avoid
+  stale chunks for the same document.
+
+## 8. Query and evaluation playbook
+
+```bash
+curl -s http://127.0.0.1:8085/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"how does quantization reduce memory","limit":3}'
+
+# restrict to one document
+curl -s http://127.0.0.1:8085/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"memory","limit":2,"doc_id":"doc-vector-quantization"}'
+```
+
+Response contains `hits[]` (`chunk_id`, `doc_id`, `score`, `text`) and
+`latency_ms`. Empty query → `422`; Qdrant down → `503`.
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml run --rm \
+  --entrypoint python ingest-worker -m vlake.evaluation \
+  --dataset configs/datasets/eval_queries.jsonl --k 5
+```
+
+Use the working-directory-relative dataset path: Git Bash on Windows rewrites
+`/app/...` into a host path and the container cannot find it.
+
+Score interpretation: with `EMBEDDING_PROVIDER=hashing` the numbers measure
+lexical overlap only. Never present them as semantic RAG quality. Semantic
+numbers require the transformer provider.
+
+## 9. Monitoring: index health, memory, disk, logs
+
+**Index health**
+
+```bash
+curl -s http://127.0.0.1:8085/ready
+# collection detail (payload size, points, index status):
+docker compose --env-file .env -f docker/docker-compose.yml exec -T search-api \
+  python -c "from vlake.config import Settings; from vlake.ingestion import build_client; \
+s=Settings.from_env(); c=build_client(s); i=c.get_collection(s.collection); \
+print(i.status, c.count(s.collection, exact=True).count, i.config.params.vectors.size)"
+```
+
+Expect `green`, a non-zero point count, and the configured dimension. A
+`yellow`/`red` status means optimization is behind or a segment is unavailable.
+
+**RAM / CPU / OOM**
+
+```bash
+docker stats --no-stream cg-vector-qdrant cg-vector-api
+free -h
+docker inspect -f '{{.State.OOMKilled}}' cg-vector-qdrant
+```
+
+Qdrant is capped by `QDRANT_MEM_LIMIT` (8 GB default) and keeps vectors in RAM
+according to the collection config; the worker peaks during embedding batches.
+`OOMKilled=true` means the limit is too low for the corpus — raise it or reduce
+`INGEST_BATCH_SIZE`, do not disable the limit.
+
+**Logs** (bounded at 20 MiB × 3 files per container)
+
+```bash
+docker compose --env-file .env -f docker/docker-compose.yml logs -f qdrant
+docker compose --env-file .env -f docker/docker-compose.yml logs --tail=200 search-api
+docker compose --env-file .env -f docker/docker-compose.yml logs ingest-worker
+docker compose --env-file .env -f docker/docker-compose.yml ps
+```
+
+**Error triage:** search-api logs each failed query with the Qdrant error;
+Qdrant logs collection creation, optimizer runs and snapshot work. The worker
+exits non-zero on a configuration error (2) or runtime failure (1) and prints
+the reason on stderr.
+
+**Audit trail:** there is no dedicated audit subsystem. Application events are
+container logs with rotation, and stage evidence belongs in
+`docs/stage-N-verification.txt`. For production retention, ship stdout to an
+external log sink; do not add an unrotated file inside the container.
+
+## 10. Configuration rules and safe-change protocol
+
+- `VECTOR_SIZE` = collection `vector_size` = embedding model dimension. Mismatch
+  is a hard error by design.
 - Changing `configs/vector_db.yaml` does not migrate an existing collection.
-  Re-ingest with `--recreate` only when dropping the existing points is
-  intended; state that intent before running it.
-- `hashing` is the offline default. Switch to `sentence-transformers` (the
-  `models` extra) for semantic retrieval.
-- Resource limits live in `.env` and in `docker/docker-compose.yml`. The high-RAM
-  profile assumes 8 GB for Qdrant and 4 GB for the worker; lower both on a
-  laptop.
+  Apply it with `--recreate` and say so first.
+- Changing `EMBEDDING_PROVIDER` or the model also changes the dimension and the
+  vector space: recreate and re-ingest, then re-run evaluation. Never mix
+  vectors from two models in one collection.
+- Qdrant client and server minors must stay within one version. The image pins
+  `qdrant/qdrant:v1.12.4` and `qdrant-client>=1.12,<1.13`; bump both together.
+- Resource limits live in `.env` and the compose file; do not remove
+  `security_opt`, `cap_drop`, `read_only` or log rotation to make a test pass.
 
-## 5. Evidence discipline
+## 11. Failure playbook
 
-- Report the command and its output. `config -q` proves syntax, not retrieval
-  quality.
-- A local stack run proves the pipeline works on this machine; it says nothing
-  about OCI capacity or performance.
-- Record a stage's measured output under `docs/stage-N-verification.txt` before
-  claiming the stage complete.
-- Never present the hashing embedder's scores as semantic quality.
+| Symptom | Cause | Action |
+| --- | --- | --- |
+| `/ready` → 503 `collection ... is missing` | no ingestion yet | run the ingest worker |
+| `/search` → 503 "vector database is unavailable" | Qdrant down or key mismatch | `logs qdrant`, compare `QDRANT_API_KEY` in both services |
+| worker exits `configuration error: ...` | bad env value, dimension mismatch, bad JSONL | read stderr, fix `.env`/dataset |
+| worker exits 1 during upsert | Qdrant unreachable or OOM | check `docker stats`, raise limit or lower batch |
+| `QDRANT_API_KEY is required` from compose | `.env` missing | `cp .env.example .env` |
+| mounted volume empty after reboot | fstab/unit failure | `systemctl status vector-lake-mount`, `journalctl -u vector-lake-mount` |
+| retrieval looks wrong, no error | hashing provider is lexical | switch to transformer provider, re-ingest, re-evaluate |
 
-## 6. Git and release
+## 12. Git and evidence discipline
 
-- Isolated repository on `main`; remote is the project's GitHub repository.
-- Commit messages describe why the change was made. No attribution trailers.
-- Tag a release only when the stage's evidence is committed.
+- Verify the boundary with `git check-ignore -v <path>` and
+  `git status --porcelain`; never by eye.
+- Never commit `.env`, `terraform.tfvars`, state, `storage/`, keys or logs.
+- Commit messages describe why; no attribution trailers.
+- A stage is complete only when its measured output is in
+  `docs/stage-N-verification.txt` and committed.
+- Report commands and their real output. `config -q` proves syntax, not quality;
+  a local run proves this machine, not OCI capacity.
 
-## 7. Stage roadmap
+## 13. Cloud portability and certification scope
+
+The container configuration and the OpenTofu modules are **cloud-agnostic**.
+The same topology runs on AWS (EC2 + EBS + VPC), GCP (GCE + Persistent Disk +
+VPC) or OCI (A1.Flex + Block Volume + VCN); only `terraform/provider.tf` and the
+three module bodies change, while variables, outputs and the compose contract
+stay fixed.
+
+**Certification scope.** Final production verification and testing certification
+for this project are performed strictly on **Oracle Cloud Infrastructure**,
+using trial credits with high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex`,
+4 OCPU / 24 GB) and persistent **OCI Block Volume** storage. AWS and GCP are
+supported ports, not certified targets: no AWS or GCP certification run is made
+or implied.
+
+**Status.** The OCI certification run is Stage 4. Today the infrastructure is
+validated (`tofu validate`; plan: 8 to add, 0 to change) but **not applied**, and
+the local container run is the only executed verification. Until Stage 4
+records cloud-init, mount, healthy services and live ingest/search evidence, do
+not describe the project as deployed, certified on OCI, benchmarked, or
+production-ready.
+
+## 14. Stage roadmap
 
 | Stage | Deliverable | Exit criteria |
 | --- | --- | --- |
-| 1 | Scaffold, compose topology, worker/API/eval code, configs | unit tests pass, compose validates, local pipeline runs |
-| 2 | OCI OpenTofu: network, compute, block volume, cloud-init | `tofu validate`/`plan` clean, variables documented |
-| 3 | Live OCI deployment | cloud-init done, healthy services, live ingest + search evidence |
-| 4 | Scale and recovery | snapshot/restore drill, load test, monitoring |
-| 5 | Quality and cost report | recall@k / MRR / latency / memory measured at target scale |
+| 1 | Scaffold, compose, worker/API/eval, configs | unit tests, compose config, local pipeline run — **done** |
+| 2 | OCI network, compute, block volume, cloud-init | `fmt`, `validate`, read-only plan — **done** |
+| 3 | Agent guide and manual prerequisites | docs complete, links valid, committed — **this stage** |
+| 4 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search |
+| 5 | Scale and recovery | snapshot/restore drill, load test, monitoring |
+| 6 | Quality and cost report | recall@k / MRR / latency / memory at target scale |
 
-## 8. Troubleshooting
+## 15. Handoff checklist
 
-| Symptom | Likely cause | Action |
-| --- | --- | --- |
-| `/ready` returns 503 `collection ... is missing` | no ingestion has run | run `ingest-worker` |
-| worker exits with a dimension error | `VECTOR_SIZE` ≠ model dimension | align `.env`, `configs/vector_db.yaml` and the model |
-| Qdrant container restarts | storage path unwritable or bad config key | inspect `docker compose logs qdrant`, check `storage/` ownership |
-| search returns nothing | empty collection or over-selective `doc_id` | check `client.count`, drop the filter |
-| embedding model download fails | no egress or the `models` extra is missing | install the extra, verify egress |
-| compose warns about `QDRANT_API_KEY` | `.env` missing | `cp .env.example .env` |
+```bash
+git status --porcelain                  # clean
+python -m unittest discover -s tests -q # 20 tests
+docker compose --env-file .env -f docker/docker-compose.yml config -q
+cd terraform && tofu fmt -recursive -check && tofu validate && cd ..
+git check-ignore -v .env terraform/terraform.tfvars
+```
+
+State what you actually ran, what you did not run, and which stage evidence file
+covers it.

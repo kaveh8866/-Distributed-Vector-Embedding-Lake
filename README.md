@@ -91,6 +91,10 @@ tests/                      dependency-free unit tests
 
 ## Quickstart
 
+Operator setup (credentials, block volume, models, `.env`) is in
+[`MANUAL_PREREQS.md`](MANUAL_PREREQS.md); agent execution, monitoring and
+failure commands are in [`AGENT_GUIDE.md`](AGENT_GUIDE.md).
+
 Requirements: Docker Engine with Compose v2, 8 GB free RAM for the default
 limits (lower `QDRANT_MEM_LIMIT` and `WORKER_MEM_LIMIT` in `.env` on a laptop).
 
