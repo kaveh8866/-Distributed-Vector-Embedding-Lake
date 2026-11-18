@@ -1,0 +1,194 @@
+Project — Distributed Vector & Embedding Lake
+Stage 6 — snapshot and restore drill on the live OCI host
+Date: 2026-11-18
+Host: vectorlake, 92.5.95.252 (eu-frankfurt-1, jiTx:EU-FRANKFURT-1-AD-1)
+Scope: capture a Qdrant collection snapshot of the live `rag_documents`
+collection, restore it into a fresh collection on the same node, verify point
+counts, payloads and vectors, and verify that retrieval quality (recall@k, MRR,
+top-k identity and scores) is unchanged after the restore. No sharding or load
+testing is claimed here.
+No credential, key or .env value appears in this file.
+
+1. Environment under test
+-------------------------
+  Qdrant         1.12.4 (container cg-vector-qdrant, 127.0.0.1:6333)
+  API            cg-vector-api, 127.0.0.1:8085, health/ready green
+  Collection     rag_documents — 384 dims, Cosine, on_disk vectors,
+                 scalar int8 quantization (quantile 0.99, always_ram),
+                 HNSW m=16 / ef_construct=128, 10 points, status green
+  Storage        /mnt/vector-lake/storage/qdrant on /dev/sdb (ext4, 196G)
+  Snapshots      /mnt/vector-lake/storage/snapshots -> /qdrant/snapshots
+  Corpus         10 synthetic documents -> 10 chunks, one point per chunk
+                 (fastembed all-MiniLM-L6-v2, 384 dims)
+
+All Qdrant calls below were made from the host over the loopback interface with
+the API key read from the host `.env` (mode 600); the value is never printed.
+
+2. Snapshot capture
+-------------------
+  POST /collections/rag_documents/snapshots
+
+  {
+    "name": "rag_documents-7603972379366776-2026-11-18-15-23-52.snapshot",
+    "creation_time": "2026-11-18T15:23:52",
+    "size": 180736,
+    "checksum": "0888334524430a99013a09aa98309026d7f8d870e25258596a3b9602426fa1bc"
+  }
+
+  API time 0.1246 s, wall clock 0.135 s (collection already optimized: 2
+  segments, no pending indexing work at capture time).
+
+On-disk artefact, via the container (root, mode 0600):
+
+  -rw------- 1 root root 180736 Nov 18 15:23 rag_documents-7603972379366776-2026-11-18-15-23-52.snapshot
+  -rw-r--r-- 1 root root     64 Nov 18 15:23 ...snapshot.checksum
+
+  sha256sum of the file == the API checksum above, so the artefact that will be
+  restored is the artefact the database reported. The snapshot lives on the
+  block volume, not the instance boot disk, so it survives container restart and
+  instance replacement.
+
+3. Restore into a fresh collection
+----------------------------------
+Target `rag_documents_restore` did not exist at the start of the drill
+(GET returned "Collection `rag_documents_restore` doesn't exist!"), so the
+restore proves recovery into an empty target rather than an overwrite.
+
+  PUT /collections/rag_documents_restore/snapshots/recover?wait=true
+  {"location": "file:///qdrant/snapshots/rag_documents/<snapshot>",
+   "priority": "snapshot"}
+
+  {"result": true, "status": "ok", "time": 0.3023}
+  wall clock 0.312 s
+
+Qdrant created the collection from the snapshot itself; no schema was
+hand-created first. Read-back of the restored collection:
+
+  status            green
+  points_count      10
+  segments_count    2
+  vectors           size 384, distance Cosine, on_disk true
+  quantization      scalar int8, quantile 0.99, always_ram true
+  HNSW              m 16, ef_construct 128
+  full_scan_thresh  10000
+
+Identical to the source configuration captured in section 1: the snapshot
+carries the collection parameters, not just the points.
+
+4. Integrity of the restored data
+---------------------------------
+Both collections were scrolled with `with_payload: true, with_vector: true`,
+sorted by point id, and hashed as canonical JSON (sort_keys=True).
+
+  source points                     10
+  restored points                   10
+  id sets equal                     true
+  source    payload+vector sha256   5e7e0974a08b1d181a604c4f29108b892a6968e38be7c2c5300fb644cb704946
+  restored  payload+vector sha256   5e7e0974a08b1d181a604c4f29108b892a6968e38be7c2c5300fb644cb704946
+  identical                         true
+
+Source payload-only sha256 (document id + chunk index per point) was
+2e0c2a130e78d4e9695a17e198a6e9f3b4d2023e0748fad09d0a7785c8c6a9c4.
+
+Point ids and document mapping recovered (10/10):
+
+  005f2180-88a3-5fe3-a3e0-cf0e52d59ba3  doc-rag-chunking          0
+  04bb19cb-35ef-51e9-9d6a-7b2bb771d08b  doc-hnsw-parameters       0
+  279ac74f-528c-5564-9671-5fe182931825  doc-vector-quantization   0
+  2e5a6222-589f-5802-83e8-4c78d9988b03  doc-ingestion-idempotency 0
+  a1b83071-d5e8-5c83-a28b-0025dd14933f  doc-embedding-dimensions  0
+  a73b64c2-2408-57f9-8170-f569c425f9d8  doc-qdrant-architecture   0
+  beb9cfab-6ec1-54af-a760-9eef63ae4f74  doc-oci-flex-shapes       0
+  c6720e76-9be0-55ca-99b5-639fd9649a73  doc-rag-evaluation        0
+  f7b452d9-30cc-57be-b5a6-8221f411ccef  doc-backup-snapshots      0
+  fdf4ad77-3b6b-5c5f-a443-30b56d5b3923  doc-oci-block-storage     0
+
+5. Retrieval parity after restore
+---------------------------------
+`python -m vlake.evaluation` (8 labelled cases, k=5) was run twice in the same
+image against the same Qdrant node, changing only COLLECTION_NAME:
+
+  rag_documents          recall@5 1.0   mrr 1.0   cases 8
+  rag_documents_restore  recall@5 1.0   mrr 1.0   cases 8
+
+Per query, retrieved document lists, recall and reciprocal rank are equal:
+
+  recall src/dst   rr   ids equal  query
+  1.0 / 1.0       1.0   true       how does scalar quantization reduce memory usage
+  1.0 / 1.0       1.0   true       which HNSW parameters trade recall for latency
+  1.0 / 1.0       1.0   true       how large should RAG chunks be and how much overlap
+  1.0 / 1.0       1.0   true       how do I measure retrieval quality
+  1.0 / 1.0       1.0   true       persistent block volume for vector segments and snapshots
+  1.0 / 1.0       1.0   true       safe repeated ingestion without duplicate points
+  1.0 / 1.0       1.0   true       Ampere A1 memory split between database and workers
+  1.0 / 1.0       1.0   true       embedding dimension storage cost for ten million chunks
+
+Score-level check (5 queries, top-5 per collection, same embedder):
+
+  all top-5 id lists identical      true
+  max absolute score delta          0.000e+00
+  top1 scores                      0.751912, 0.579495, 0.585335, 0.689273, 0.719263
+
+Zero delta is the expected result here: the restored vectors are the same
+float32 values, and both collections use the same int8 quantization and HNSW
+parameters, so scoring follows the same path. It confirms the restore was not
+silently de-quantized, re-embedded or re-indexed with different settings.
+
+6. Durability of the restored collection
+----------------------------------------
+The drill also checks that a recovered collection is written to the block
+volume rather than held in memory:
+
+  docker restart cg-vector-qdrant
+  /readyz -> "all shards are ready" (container healthy again in ~23 s)
+
+  rag_documents          after restart: green 10
+  rag_documents_restore  after restart: green 10
+
+  GET /health -> {"status":"ok","version":"0.1.0"}
+  GET /ready  -> {"status":"ready","collection":"rag_documents"}
+
+7. Cleanup and retention
+------------------------
+The drill collection was removed after verification so the deployment keeps a
+single canonical collection:
+
+  DELETE /collections/rag_documents_restore -> {"result": true, ...}
+  collections -> ['rag_documents']
+  rag_documents -> green, 10 points, 384/Cosine/on_disk, scalar int8
+
+The snapshot file is retained on the block volume as the restorable artefact
+(180,736 B + 64 B checksum sidecar, 0600 root). Restoring it again is one PUT
+that completes in ~0.3 s at this data size.
+
+  /mnt/vector-lake  1.3M used of 196G (1%)
+  /qdrant/storage   1.1M
+
+8. Verdict
+----------
+PASS. The live collection was snapshotted, restored into a fresh collection on
+the same node without hand-creating a schema, came back byte-identical (ids,
+payloads, vectors), retained its quantization and HNSW parameters, and produced
+exactly the same retrieval results and scores (recall@5 1.0, MRR 1.0, zero
+score delta). Both collections survived a Qdrant restart.
+
+9. What this does not prove
+---------------------------
+- **Same-node, local-file restore.** The snapshot was read with a
+  `file:///qdrant/snapshots/...` URI on the node that produced it. Recovery from
+  object storage (`s3://`), from an uploaded file into a different cluster, or
+  from the Qdrant CLI `--snapshot` start-up path was not exercised.
+- **Ten points, 180 KB.** The 0.3 s restore time says nothing about recovery
+  time for a multi-gigabyte collection; it is a mechanics check, not a
+  recovery-time objective.
+- **Single node, one shard, replication factor 1.** No shard rebalancing, no
+  replica resynchronization and no partial-failure recovery is covered.
+- **No scheduled snapshots.** Capture was on demand through the API. There is no
+  cron/policy, retention rule, or restore-into-a-second-environment test.
+- **No load test.** Concurrency, sustained throughput and latency under
+  pressure remain unmeasured (the p50/p95 in Stage 5 came from sequential
+  requests).
+- **Restore while serving was not measured.** The API stayed up and bound to
+  `rag_documents` throughout; recovery into a second collection name was the
+  isolation mechanism, and no assertion is made about API latency during a
+  restore of the live collection itself.

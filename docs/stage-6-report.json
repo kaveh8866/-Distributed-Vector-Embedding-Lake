@@ -1,0 +1,176 @@
+{
+  "stage": 6,
+  "drill": "snapshot_restore",
+  "date": "2026-11-18",
+  "verdict": "PASS",
+  "host": {
+    "name": "vectorlake",
+    "public_ip": "92.5.95.252",
+    "shape": "VM.Standard.A2.Flex",
+    "availability_domain": "jiTx:EU-FRANKFURT-1-AD-1",
+    "qdrant_version": "1.12.4",
+    "storage_mount": "/mnt/vector-lake"
+  },
+  "collection": {
+    "name": "rag_documents",
+    "points_count": 10,
+    "vector_size": 384,
+    "distance": "Cosine",
+    "on_disk": true,
+    "quantization": {
+      "type": "int8",
+      "quantile": 0.99,
+      "always_ram": true
+    },
+    "hnsw": {
+      "m": 16,
+      "ef_construct": 128,
+      "full_scan_threshold": 10000
+    },
+    "segments_count": 2,
+    "status": "green"
+  },
+  "snapshot": {
+    "name": "rag_documents-7603972379366776-2026-11-18-15-23-52.snapshot",
+    "creation_time": "2026-11-18T15:23:52",
+    "size_bytes": 180736,
+    "checksum_sha256": "0888334524430a99013a09aa98309026d7f8d870e25258596a3b9602426fa1bc",
+    "file_checksum_matches_api": true,
+    "path": "/mnt/vector-lake/storage/snapshots/rag_documents/rag_documents-7603972379366776-2026-11-18-15-23-52.snapshot",
+    "file_mode": "0600 root:root",
+    "api_time_s": 0.1246,
+    "wall_time_s": 0.135,
+    "retained": true
+  },
+  "restore": {
+    "target_collection": "rag_documents_restore",
+    "endpoint": "PUT /collections/rag_documents_restore/snapshots/recover?wait=true",
+    "location": "file:///qdrant/snapshots/rag_documents/<snapshot>",
+    "priority": "snapshot",
+    "target_existed_before": false,
+    "collection_auto_created_from_snapshot": true,
+    "duration_s": 0.3023,
+    "wall_time_s": 0.312,
+    "config_restored": true
+  },
+  "integrity": {
+    "points_source": 10,
+    "points_restored": 10,
+    "id_sets_equal": true,
+    "source_payload_sha256": "2e0c2a130e78d4e9695a17e198a6e9f3b4d2023e0748fad09d0a7785c8c6a9c4",
+    "source_payload_vector_sha256": "5e7e0974a08b1d181a604c4f29108b892a6968e38be7c2c5300fb644cb704946",
+    "restored_payload_vector_sha256": "5e7e0974a08b1d181a604c4f29108b892a6968e38be7c2c5300fb644cb704946",
+    "identical": true
+  },
+  "retrieval": {
+    "harness": "python -m vlake.evaluation",
+    "cases": 8,
+    "k": 5,
+    "recall_at_k_source": 1.0,
+    "recall_at_k_restored": 1.0,
+    "mrr_source": 1.0,
+    "mrr_restored": 1.0,
+    "per_query_identical": true,
+    "score_comparison": {
+      "queries": 5,
+      "k": 5,
+      "top_k_ids_identical": true,
+      "max_abs_score_delta": 0.0
+    },
+    "results": [
+      {
+        "query": "how does scalar quantization reduce memory usage",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-vector-quantization"
+      },
+      {
+        "query": "which HNSW parameters trade recall for latency",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-hnsw-parameters"
+      },
+      {
+        "query": "how large should RAG chunks be and how much overlap",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-rag-chunking"
+      },
+      {
+        "query": "how do I measure retrieval quality",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-rag-evaluation"
+      },
+      {
+        "query": "persistent block volume for vector segments and snapshots",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-oci-block-storage"
+      },
+      {
+        "query": "safe repeated ingestion without duplicate points",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-ingestion-idempotency"
+      },
+      {
+        "query": "Ampere A1 memory split between database and workers",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-oci-flex-shapes"
+      },
+      {
+        "query": "embedding dimension storage cost for ten million chunks",
+        "recall_at_k_source": 1.0,
+        "recall_at_k_restored": 1.0,
+        "reciprocal_rank": 1.0,
+        "retrieved_doc_ids_equal": true,
+        "top_doc_id": "doc-embedding-dimensions"
+      }
+    ]
+  },
+  "durability": {
+    "qdrant_restarted": true,
+    "ready_after_restart": "all shards are ready",
+    "container_healthy_again_s": 23,
+    "source_after_restart": "green / 10 points",
+    "restored_after_restart": "green / 10 points"
+  },
+  "cleanup": {
+    "drill_collection_deleted": true,
+    "collections_remaining": ["rag_documents"],
+    "canonical_collection_after_cleanup": "green / 10 points"
+  },
+  "api": {
+    "health": "ok",
+    "version": "0.1.0",
+    "ready": "ready",
+    "collection": "rag_documents"
+  },
+  "storage": {
+    "volume_used": "1.3M of 196G",
+    "qdrant_storage": "1.1M"
+  },
+  "not_verified": [
+    "restore from object storage or from a snapshot uploaded into a different cluster",
+    "restore at multi-gigabyte scale (recovery-time behaviour)",
+    "sharding, replication and partial-failure recovery",
+    "scheduled snapshot policy and retention",
+    "latency during a live-collection restore or under sustained concurrent load"
+  ]
+}

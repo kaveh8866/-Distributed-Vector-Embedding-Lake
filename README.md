@@ -399,7 +399,7 @@ docs/                       per-stage verification evidence and reports
 | 3 | Agent guide and manual prerequisites | Done |
 | 4 | Local semantic ingestion, retrieval and latency | Done — `docs/stage-4-verification.txt` |
 | 5 | Live OCI deployment and verification | Done — `docs/stage-5-verification.txt` |
-| 6 | Scale-out: sharding, snapshot/restore drill, monitoring, load test | Not started |
+| 6 | Scale-out: sharding, snapshot/restore drill, monitoring, load test | Partial — snapshot/restore drill done, `docs/stage-6-verification.txt`; sharding, monitoring and load test pending |
 | 7 | Security audit, documentation, cost estimation | Done — `docs/stage-7-security-audit.txt`, this README |
 | 8 | Release packaging: license, clean tree, `v1.0.0` tag, public repository | Done — tag `v1.0.0` |
 
@@ -413,9 +413,12 @@ docs/                       per-stage verification evidence and reports
   sequential requests.
 - **A1.Flex was unavailable** in all three eu-frankfurt-1 ADs at deploy time; the
   certified host is Ampere `A2.Flex`. No Always-Free claim is attached to it.
-- **Snapshot/restore has not been drilled**, and the cloud-init template fix has
-  not been exercised by a fresh boot (it implies a 2-add/2-destroy instance
-  replacement; see `docs/stage-5-verification.txt`).
+- **Snapshot/restore was drilled on one node only** (same-node local-file
+  restore of 10 points; see `docs/stage-6-verification.txt`). Object-storage and
+  cross-cluster recovery, scheduled snapshots and restore time at scale are
+  untested. The cloud-init template fix has not been exercised by a fresh boot
+  (it implies a 2-add/2-destroy instance replacement; see
+  `docs/stage-5-verification.txt`).
 - **AWS and GCP were not deployed**, so their rows are price models, not
   benchmarks.
 - Quantization recall loss, HNSW parameter tuning and filtered-search latency at
