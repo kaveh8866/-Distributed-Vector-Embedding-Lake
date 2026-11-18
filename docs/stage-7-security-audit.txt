@@ -1,0 +1,119 @@
+Project — Distributed Vector & Embedding Lake
+Stage 7 — zero-leak security audit and documentation sign-off
+Date: 2026-11-18
+Auditor: agent, on the operator workstation (Windows, Git Bash)
+Scope: the project tree at commit 7d41b0d plus the Stage 7 working changes.
+Method: every check is a command with its real exit status; nothing is asserted
+from memory. No secret value is printed in this file.
+
+1. What may enter Git
+---------------------
+Tracked files: 49
+Composition: 13 .tf, 9 .py, 4 .txt, 4 .md, 3 .yaml, 2 .yml, 2 .jsonl, 2 .json,
+plus Dockerfile, LICENSE, .gitignore, .env.example, .dockerignore and the
+OpenTofu lock file.
+
+Filename scan of the index:
+
+  git ls-files | grep -E '(^|/)\.env($|\.)|\.pem$|\.key$|\.p12$|\.pfx$|
+    id_rsa|id_ed25519|tfstate|\.tfvars$|\.db$|\.sqlite|(^|/)storage/|
+    (^|/)logs/|\.log$|\.snapshot$'
+
+  -> .env.example   (a template, allowed and required)
+  -> no key, state, database, snapshot, log, vector-storage or real .env file
+
+Content scan of every tracked file:
+
+  git grep -nIE 'BEGIN (OPENSSH|RSA|EC|PRIVATE) PRIVATE KEY|AKIA[0-9A-Z]{16}|
+    -----BEGIN|oci_api_key'
+
+  -> no key material. The only hits are MANUAL_PREREQS.md instructions that
+     mention the path `~/.oci/oci_api_key.pem` while telling the operator to
+     keep the key outside the repository; no key content is present.
+
+History scan (all commits, all paths):
+
+  git log --all --name-only --pretty=format: | sort -u |
+    grep -E '\.pem$|\.key$|tfstate|(^|/)\.env$|storage/|\.db$'
+
+  -> empty. No sensitive path has ever been committed on any branch.
+
+2. Ignore rules are active, not decorative
+------------------------------------------
+  git check-ignore -v:
+    .gitignore:9:.env                     .env
+    .gitignore:9:.env.*                   .env.local
+    .gitignore:79:*.tfvars                terraform/terraform.tfvars
+    .gitignore:80:*.tfplan                terraform/stage5.tfplan
+    .gitignore:29:storage/                storage/qdrant
+    .gitignore:56:runtime/                runtime/repo.tar.gz
+
+  docs/stage-5-report.json and docs/stage-4-report.json are intentionally
+  tracked: they contain latencies, recall values and citation ids only. They are
+  evidence, not credentials.
+
+The local `.env` exists (mode 600), is ignored, and carries the generated Qdrant
+key for local runs; the OCI host has its own `.env` with a separately generated
+key. Neither is in the repository. `terraform/terraform.tfvars` is ignored and
+holds the local OCIDs and public key only.
+
+3. `.gitignore` coverage
+------------------------
+Sections present and verified by the checks above:
+
+  environment/credentials  .env, .env.* (with !.env.example), *.pem, *.key,
+                           *.p12, *.pfx, *.crt, id_rsa*, id_ed25519*, secrets/,
+                           keys/, credentials.json, *service-account*.json
+  vector data              storage/, qdrant_storage/, vector_storage/, snapshots/,
+                           *.snapshot, *.snap, *.db, *.sqlite*, *.wal, *.shm,
+                           wal/, segments/, payload_index/, *.dump, *.tar.gz
+  datasets                 data/, datasets/private/, datasets/raw/, incoming/
+  runtime                  runtime/, logs/, *.log, __pycache__, .venv, caches
+  IaC state                .terraform/, *.tfstate*, *.tfvars (with
+                           !terraform.tfvars.example), *.tfplan, crash logs
+  container scratch        docker/docker-compose.override.yml, docker/*.local.*,
+                           secrets.yaml
+  OS/editor                .DS_Store, Thumbs.db, .idea/, .vscode/
+
+4. `.env.example` structure
+---------------------------
+  29 KEY=value placeholders; no live-looking value.
+  The only credential-shaped key is
+    QDRANT_API_KEY=replace-with-local-qdrant-api-key
+  which is a label, not a working key, and the file header says so.
+
+  Required semantics are documented inline: provider selection (hashing /
+  fastembed / sentence-transformers), image extras (VLAKE_EXTRAS=base), ONNX
+  thread guidance tied to API_CPUS, and the local persistence directories.
+
+5. Application-level leak surface
+---------------------------------
+- Qdrant requires an API key; compose refuses to start without one
+  (`${QDRANT_API_KEY:?...}`).
+- Worker and API run read-only with cap_drop ALL, so a compromised process
+  cannot rewrite its own image.
+- Instance metadata (user_data) carries cloud-init only: no `.env`, no key, no
+  token. The deployed check confirmed the stack reads its key from the host
+  `.env` at runtime.
+- The retrieval API returns chunk payloads and latency; it does not echo the
+  environment or database credentials.
+- Terraform outputs are limited to addresses, OCIDs, sizes and an exposure
+  inventory; the deploy hint carries no credential.
+
+6. Result
+
+  PASS — no credential, private key, Terraform state, tfvars, database,
+  snapshot, vector-storage directory or log file is tracked in the repository,
+  and none appears in history. Ignore rules were verified with
+  `git check-ignore -v`, not by inspection.
+
+  Structural portability audit (vault): PORTABLE_CERTIFIED, 100/100, 5/5 checks
+  (zero-leak, environment scaffold, documentation, Git isolation,
+  containerization), re-run after this stage's commit.
+
+  Residual risks that are outside this audit:
+  - the operator workstation holds local `.env` and `~/.oci` credentials, which
+    is intended and outside Git;
+  - the running OCI host holds a generated Qdrant key on disk (mode 600);
+  - no secret-scanning hook is configured in `.git/hooks` — the checks are run
+    manually and recorded here.

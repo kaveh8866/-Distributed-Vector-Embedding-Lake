@@ -351,7 +351,7 @@ available, or benchmarked at scale; those are Stage 6 and 7.
 | 4 | Local testing: schema, semantic ingest, retrieval, latency | recall@k / latency recorded, no OOM — **done** (`docs/stage-4-verification.txt`) |
 | 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Scale and recovery | snapshot/restore drill, load test, monitoring |
-| 7 | Quality and cost report | recall@k / MRR / latency / memory at target scale |
+| 7 | Security audit, documentation, cross-cloud cost model | zero-leak audit signed off, README with architecture/portability/costs — **done** (`docs/stage-7-security-audit.txt`) |
 
 ## 15. Handoff checklist
 
