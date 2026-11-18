@@ -19,13 +19,16 @@ services:
     extends:
       file: docker/docker-compose.yml
       service: qdrant
+    image: qdrant/qdrant:v1.12.4
 
   ingest-worker:
     extends:
       file: docker/docker-compose.yml
       service: ingest-worker
+    image: cloudguard/vector-lake:local
 
   search-api:
     extends:
       file: docker/docker-compose.yml
       service: search-api
+    image: cloudguard/vector-lake:local
