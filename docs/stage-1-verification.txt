@@ -1,0 +1,179 @@
+Project — Distributed Vector & Embedding Lake
+Stage 1 — scaffold and CloudGuard profiling
+Date: 2026-11-18
+Host: Windows workstation, Docker Desktop (linux/amd64 containers)
+Repository: https://github.com/kaveh8866/-Distributed-Vector-Embedding-Lake
+Branch: main
+
+Scope of this stage: repository scaffold, container topology, ingestion worker,
+retrieval API, evaluation loop, configuration schema and CloudGuard metadata.
+No OCI resource was created. The compose stack was built and run locally to
+prove the topology, not to benchmark it.
+
+Tooling observed
+----------------
+Docker             29.8.1
+Docker Compose     5.5.1
+Host Python        3.11.9 (unit tests only)
+Image Python       3.12 (python:3.12-slim)
+Qdrant server      qdrant/qdrant:v1.12.4
+qdrant-client      1.12.2 (pinned to the server minor)
+FastAPI            0.164.0
+
+1. Syntax and configuration checks
+----------------------------------
+docker compose --env-file .env -f docker/docker-compose.yml config -q
+  exit 0
+
+docker compose --env-file .env config -q          # root entrypoint with extends
+  exit 0
+
+docker compose ... config --services
+  qdrant
+  search-api
+  ingest-worker
+
+python -m compileall -q src tests
+  exit 0
+
+python -m unittest discover -s tests
+  Ran 20 tests
+  OK
+
+Coverage of the unit suite: chunk sizing and boundary handling, overlap
+validation, stable chunk IDs, deterministic L2-normalised hashing embeddings,
+provider rejection, recall@k and MRR maths, JSONL corpus parsing, evaluation
+dataset integrity, settings defaults, and collection YAML parsing.
+
+PYTHONPATH=src python -m vlake.ingestion --dry-run \
+  --dataset configs/datasets/sample_documents.jsonl
+  10 documents -> 10 chunks, average 449.8 characters per chunk
+  (the synthetic documents are shorter than the 800-character window)
+
+2. Image build
+--------------
+docker compose ... build ingest-worker
+  exit 0
+  image: cloudguard/vector-lake:local
+
+Dependency fix during verification: the first build resolved qdrant-client
+1.20.0, and the client warned that it was incompatible with the 1.12.4 server
+("Major versions should match and minor version difference must not exceed 1").
+pyproject.toml now pins qdrant-client>=1.12,<1.13. Rebuilt image reports
+qdrant-client 1.12.2 with no compatibility warning.
+
+3. Qdrant startup
+-----------------
+docker compose ... up -d qdrant
+  health status: healthy (first probe after start)
+  container: cg-vector-qdrant
+
+Startup log excerpts (config applied from docker/qdrant/config.yaml):
+  Distributed mode disabled
+  Telemetry reporting disabled
+  Qdrant gRPC listening on 6334
+  Qdrant HTTP listening on 6333
+
+4. Ingestion (real write, not a dry run)
+---------------------------------------
+docker compose ... run --rm ingest-worker
+  exit 0
+  documents            10
+  chunks               10
+  average_chunk_chars  449.8
+  collection           rag_documents
+  collection_created   true
+  points_written       10
+  collection_points    10
+  embedder             hashing-384
+  vector_dimension     384
+
+Idempotency check (immediate re-run of the same command):
+  collection_created   false
+  points_written       10
+  collection_points    10
+  => deterministic point IDs overwrote the same points instead of duplicating
+
+Collection read back from the server:
+  vector_size   384
+  distance      Cosine
+  quantization  scalar int8, quantile 0.99, always_ram true
+  status        green
+
+5. Retrieval API
+----------------
+docker compose ... up -d search-api
+  container cg-vector-api: healthy, 127.0.0.1:8085 -> 8080/tcp
+
+GET /health     200  {"status":"ok","version":"0.1.0"}
+GET /ready      200  {"status":"ready","collection":"rag_documents"}
+
+POST /search   200
+  query: "how does quantization reduce memory", limit 3
+  first hit: doc-hnsw-parameters (score 0.1497), then doc-qdrant-architecture
+  (0.1340), then doc-rag-evaluation (0.0569)
+  latency reported by the service: 7.46 ms
+
+POST /search with doc_id=doc-vector-quantization, limit 2
+  200, single hit doc-vector-quantization (0.1410) => payload filter applied
+  latency 8.4 ms
+
+POST /search with an empty query
+  422 => request validation rejects an empty query
+
+Port note: the default API port is 8085 because port 8080 is occupied by the
+CloudGuard orchestrator's own development server on this workstation. The
+container listens on 8080 internally; only the host binding differs.
+
+6. Evaluation loop
+------------------
+docker compose ... run --rm --entrypoint python ingest-worker \
+  -m vlake.evaluation --dataset configs/datasets/eval_queries.jsonl --k 5
+
+  cases         8
+  k             5
+  recall_at_k   0.875
+  mrr           0.6458
+  exit 0
+
+These numbers belong to the offline hashing embedder, which captures lexical
+overlap only and is not a semantic retriever. The exact-lexical queries
+("safe repeated ingestion without duplicate points", "embedding dimension
+storage cost") score 1.0, while paraphrase queries lose the top rank. This is
+the expected behaviour of the fallback provider and the reason the evaluation
+hook exists; no semantic-quality claim is made for Stage 1.
+
+7. Defects found and fixed during verification
+----------------------------------------------
+- config.Settings/CollectionConfig used dataclasses with slots=True while
+  reading class-level defaults, which are member descriptors under slots. Any
+  execution without a fully populated environment raised AttributeError.
+  Defaults are now read from an instance, and a regression test asserts that
+  Settings.from_env() works with an empty environment.
+- qdrant-client/server minor mismatch (described in section 2).
+- Git Bash converted a container path (/app/configs/...) into a Windows path,
+  so the evaluation CLI now takes the working-directory-relative path; the
+  README documents the relative form.
+- Host port 8080 conflicted with the CloudGuard dev server; the project default
+  moved to 8085.
+
+8. Teardown
+-----------
+docker compose ... down
+  removed containers cg-vector-api and cg-vector-qdrant and the
+  cloudguard-vector-net bridge network; exit 0
+
+Host-side storage/ (vector segments and snapshots) is retained and gitignored.
+No container, port binding or background process from this project remains.
+
+9. Not verified at Stage 1
+--------------------------
+- No OCI infrastructure exists yet: terraform/ holds the Stage 2 contract only.
+- The sentence-transformers provider was not executed (model download and
+  CPU inference belong to the live stage).
+- No performance, concurrency or memory benchmark; no latency claim beyond the
+  single local request above.
+- Snapshot/restore is configured and mounted but has not been drilled.
+- Qdrant logs a warning that an API key is used over plain HTTP. The connection
+  is container-to-container on a private bridge network; TLS termination is a
+  Stage 3/4 item.

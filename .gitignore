@@ -1,0 +1,98 @@
+# =============================================================================
+# Distributed Vector & Embedding Lake — Git boundary
+# =============================================================================
+# This repository stores vector indexes, embeddings, document payloads and
+# deployment state that are large, private or both. None of that may enter Git.
+# Only source, configuration templates and synthetic sample data are trackable.
+
+# --- Environment and credentials ---------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.csr
+id_rsa*
+id_ed25519*
+id_ecdsa*
+*.ppk
+secrets/
+keys/
+credentials.json
+*service-account*.json
+application_default_credentials.json
+
+# --- Vector database storage and snapshots -----------------------------------
+storage/
+qdrant_storage/
+vector_storage/
+snapshots/
+*.snapshot
+*.snap
+*.db
+*.sqlite
+*.sqlite3
+*.mdb
+*.wal
+*.shm
+wal/
+segments/
+payload_index/
+# Exported collection dumps are data, not source.
+*.dump
+*.tar.gz
+
+# --- Local datasets that are not synthetic samples ---------------------------
+data/
+datasets/private/
+datasets/raw/
+incoming/
+# The tracked sample corpus lives under configs/datasets and is synthetic.
+
+# --- Runtime state, logs and caches ------------------------------------------
+runtime/
+logs/
+*.log
+*.jsonl.tmp
+*.pid
+*.sock
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# --- OpenTofu / Terraform ----------------------------------------------------
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+crash.log
+crash.*.log
+*.tfplan
+
+# --- Container scratch -------------------------------------------------------
+docker/docker-compose.override.yml
+docker/*.local.*
+secrets.yaml
+secrets.yml
+
+# --- OS / editor noise -------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.code-workspace

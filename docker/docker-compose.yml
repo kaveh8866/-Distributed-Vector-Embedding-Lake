@@ -1,0 +1,208 @@
+# =============================================================================
+# Distributed Vector & Embedding Lake — canonical runtime composition
+# =============================================================================
+# Three services share one bridge network:
+#   qdrant         vector database, persistent storage + snapshots
+#   ingest-worker  chunk -> embed -> upsert (one-shot batch job)
+#   search-api     FastAPI retrieval endpoint for RAG clients
+#
+# Sizing assumes a high-memory OCI shape (Stage 2 provisions an A1.Flex or
+# VM.Standard3.Flex profile with a persistent block volume). The limits are a
+# ceiling, not a reservation; lower them for a laptop.
+#
+# Hardening rationale:
+#   no-new-privileges   no setuid escalation inside any container
+#   cap_drop: ALL       neither the worker nor the API needs a capability
+#   read_only + tmpfs   immutable rootfs for stateless services
+#   pids_limit          a runaway tokenizer cannot fork-bomb the host
+#   loopback publishing only Qdrant and the API bind 127.0.0.1
+#   log rotation        20 MiB x 3 files per container, never unbounded
+#
+# Workflow:
+#   cp .env.example .env
+#   mkdir -p storage/qdrant storage/snapshots
+#   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+#   docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
+#
+# The root docker-compose.yml extends these services for repository-root
+# discovery; docker/ remains the canonical definition.
+
+name: cloudguard-vector-lake
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "3"
+
+x-vector-env: &vector-env
+  QDRANT_URL: http://qdrant:6333
+  QDRANT_API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required - copy .env.example to .env}
+  COLLECTION_NAME: ${COLLECTION_NAME:-rag_documents}
+  VECTOR_SIZE: ${VECTOR_SIZE:-384}
+  DISTANCE: ${DISTANCE:-Cosine}
+  EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
+  EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
+  CHUNK_SIZE: ${CHUNK_SIZE:-800}
+  CHUNK_OVERLAP: ${CHUNK_OVERLAP:-120}
+  INGEST_BATCH_SIZE: ${INGEST_BATCH_SIZE:-64}
+  TOP_K: ${TOP_K:-5}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  TZ: ${TZ:-UTC}
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    container_name: cg-vector-qdrant
+    restart: unless-stopped
+
+    environment:
+      QDRANT__LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:?QDRANT_API_KEY is required - copy .env.example to .env}
+      QDRANT__TELEMETRY_DISABLED: "true"
+      TZ: ${TZ:-UTC}
+
+    volumes:
+      # Vector segments, WAL and payload storage. Host paths are gitignored.
+      - ${VECTOR_STORAGE_DIR:-../storage/qdrant}:/qdrant/storage
+      # Snapshot target for scheduled and on-demand backups.
+      - ${VECTOR_SNAPSHOT_DIR:-../storage/snapshots}:/qdrant/snapshots
+      # Runtime tuning only; per-collection parameters live in configs/.
+      - ./qdrant/config.yaml:/qdrant/config/production.yaml:ro
+
+    ports:
+      # Operator surface. Never publish 6333/6334 on 0.0.0.0 without a firewall.
+      - "127.0.0.1:${QDRANT_HTTP_PORT:-6333}:6333"
+
+    healthcheck:
+      # TCP probe: the HTTP API requires the key, so an authenticated request in
+      # a healthcheck would duplicate a credential in the compose file.
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6333'"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    # --- resource envelope (high-RAM profile) ------------------------------
+    mem_limit: ${QDRANT_MEM_LIMIT:-8g}
+    memswap_limit: ${QDRANT_MEM_LIMIT:-8g}
+    cpus: ${QDRANT_CPUS:-4}
+    pids_limit: 512
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
+
+    # Qdrant writes segments to its volume, so the rootfs stays writable; every
+    # other hardening flag still applies.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    logging: *default-logging
+    stop_grace_period: 30s
+
+  ingest-worker:
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+    image: cloudguard/vector-lake:local
+    container_name: cg-vector-ingest
+    restart: "no"
+
+    command:
+      - "-m"
+      - "vlake.ingestion"
+      - "--dataset"
+      - "${DATASET_PATH:-/data/sample_documents.jsonl}"
+
+    environment: *vector-env
+
+    volumes:
+      - ../configs:/app/configs:ro
+      - ../configs/datasets:/data:ro
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m,mode=1777,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+
+    mem_limit: ${WORKER_MEM_LIMIT:-4g}
+    memswap_limit: ${WORKER_MEM_LIMIT:-4g}
+    cpus: ${WORKER_CPUS:-2}
+
+    logging: *default-logging
+    stop_grace_period: 20s
+
+  search-api:
+    build:
+      context: ..
+      dockerfile: docker/worker/Dockerfile
+    image: cloudguard/vector-lake:local
+    container_name: cg-vector-api
+    restart: unless-stopped
+
+    command:
+      - "-m"
+      - "uvicorn"
+      - "vlake.search:app"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8080"
+      - "--log-level"
+      - "info"
+
+    environment: *vector-env
+
+    volumes:
+      - ../configs:/app/configs:ro
+
+    ports:
+      - "127.0.0.1:${API_PORT:-8085}:8080"
+
+    depends_on:
+      qdrant:
+        condition: service_healthy
+
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=3).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777,nosuid,nodev
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+
+    mem_limit: ${API_MEM_LIMIT:-2g}
+    memswap_limit: ${API_MEM_LIMIT:-2g}
+    cpus: ${API_CPUS:-1}
+
+    logging: *default-logging
+    stop_grace_period: 20s
+
+networks:
+  default:
+    name: cloudguard-vector-net
+    driver: bridge

@@ -1,0 +1,31 @@
+# =============================================================================
+# Root Compose entrypoint — CloudGuard / repository tooling
+# =============================================================================
+# The canonical services, hardening flags and resource envelopes live in
+# docker/docker-compose.yml. This thin root file lets a reviewer, CI job or the
+# CloudGuard portability audit discover and run the lake from the repository
+# root without duplicating definitions.
+#
+# Documented workflow uses docker/ directly:
+#   docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+#
+# This entrypoint is equivalent:
+#   docker compose --env-file .env up -d --build
+
+name: cloudguard-vector-lake
+
+services:
+  qdrant:
+    extends:
+      file: docker/docker-compose.yml
+      service: qdrant
+
+  ingest-worker:
+    extends:
+      file: docker/docker-compose.yml
+      service: ingest-worker
+
+  search-api:
+    extends:
+      file: docker/docker-compose.yml
+      service: search-api

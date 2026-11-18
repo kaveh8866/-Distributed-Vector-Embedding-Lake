@@ -1,0 +1,38 @@
+# =============================================================================
+# Qdrant runtime configuration (mounted at /qdrant/config/production.yaml)
+# =============================================================================
+# Only runtime concerns live here: storage paths, listener ports, payload
+# policy and telemetry. Per-collection tuning (HNSW, quantization, shards)
+# lives in configs/vector_db.yaml and is applied through the API, so a change
+# never requires editing the database container.
+#
+# Schema reference: https://qdrant.tech/documentation/guides/configuration/
+
+log_level: INFO
+telemetry_disabled: true
+
+storage:
+  # Both paths are bind-mounted by docker/docker-compose.yml and are gitignored.
+  storage_path: /qdrant/storage
+  snapshots_path: /qdrant/snapshots
+  # Payloads (document text + metadata) stay on disk to keep RAM for the HNSW
+  # graph. Required for a corpus that does not fit in memory.
+  on_disk_payload: true
+  optimizers:
+    # Two segments keeps a single-node lake responsive during background merges.
+    default_segment_number: 2
+    # Memory-map segments above 200 MB instead of holding them in RAM.
+    memmap_threshold_kb: 200000
+
+service:
+  host: 0.0.0.0
+  http_port: 6333
+  grpc_port: 6334
+  # The API is consumed by workers and the retrieval service, not browsers.
+  enable_cors: false
+  max_request_size_mb: 64
+  # Batch upserts are the normal write path; 10s is generous for local storage.
+  grpc_timeout_sec: 10
+
+cluster:
+  enabled: false

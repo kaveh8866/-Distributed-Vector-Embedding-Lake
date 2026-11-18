@@ -1,0 +1,8 @@
+{"query": "how does scalar quantization reduce memory usage", "relevant_doc_ids": ["doc-vector-quantization"], "top_k": 5}
+{"query": "which HNSW parameters trade recall for latency", "relevant_doc_ids": ["doc-hnsw-parameters"], "top_k": 5}
+{"query": "how large should RAG chunks be and how much overlap", "relevant_doc_ids": ["doc-rag-chunking"], "top_k": 5}
+{"query": "how do I measure retrieval quality", "relevant_doc_ids": ["doc-rag-evaluation"], "top_k": 5}
+{"query": "persistent block volume for vector segments and snapshots", "relevant_doc_ids": ["doc-oci-block-storage", "doc-backup-snapshots"], "top_k": 5}
+{"query": "safe repeated ingestion without duplicate points", "relevant_doc_ids": ["doc-ingestion-idempotency"], "top_k": 5}
+{"query": "Ampere A1 memory split between database and workers", "relevant_doc_ids": ["doc-oci-flex-shapes"], "top_k": 5}
+{"query": "embedding dimension storage cost for ten million chunks", "relevant_doc_ids": ["doc-embedding-dimensions"], "top_k": 5}

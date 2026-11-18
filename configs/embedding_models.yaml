@@ -1,0 +1,60 @@
+# =============================================================================
+# Embedding model definitions
+# =============================================================================
+# The provider is chosen at runtime with EMBEDDING_PROVIDER. VECTOR_SIZE and
+# the model dimension must agree; the worker refuses a mismatch instead of
+# writing vectors of the wrong shape.
+#
+# `hashing` is the offline default: no model download, deterministic vectors,
+# lexical similarity only. Use a transformer model for real RAG quality.
+
+default_provider: hashing
+
+providers:
+  hashing:
+    description: Signed feature hashing over unigrams and bigrams (offline, deterministic).
+    requires_download: false
+    dimensions: [256, 384, 768]
+    default_dimension: 384
+    similarity: cosine
+    best_for: Container smoke tests, CI and evaluation-harness wiring.
+
+  sentence-transformers:
+    description: Transformer encoders loaded through the optional `models` extra.
+    requires_download: true
+    similarity: cosine
+    models:
+      - name: sentence-transformers/all-MiniLM-L6-v2
+        dimension: 384
+        max_sequence_tokens: 256
+        size_mb: 90
+        best_for: Fast English RAG with modest RAM.
+      - name: BAAI/bge-small-en-v1.5
+        dimension: 384
+        max_sequence_tokens: 512
+        size_mb: 130
+        best_for: English retrieval with stronger short-query recall.
+      - name: nomic-ai/nomic-embed-text-v1.5
+        dimension: 768
+        max_sequence_tokens: 8192
+        size_mb: 550
+        best_for: Long-context documents and mixed technical corpora.
+      - name: BAAI/bge-m3
+        dimension: 1024
+        max_sequence_tokens: 8192
+        size_mb: 2200
+        best_for: Multilingual retrieval on a high-RAM node.
+
+chunking:
+  # Character windows with whitespace-aware boundaries (see vlake.ingestion).
+  chunk_size: 800
+  overlap: 120
+  rationale: >
+    Roughly 150-200 English words per chunk. Large enough to hold a complete
+    technical statement, small enough that a single embedding stays specific.
+    The 15% overlap preserves sentences that straddle a boundary.
+
+evaluation:
+  metric: recall_at_k
+  k: 5
+  dataset: configs/datasets/eval_queries.jsonl

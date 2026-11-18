@@ -1,0 +1,43 @@
+# =============================================================================
+# Vector database parameters — applied when the collection is created
+# =============================================================================
+# Runtime storage and port settings live in docker/qdrant/config.yaml. This
+# file describes the collection the ingestion worker creates and the retrieval
+# API queries, so both roles agree on one schema.
+#
+# Changing a value here does not alter an existing collection: re-ingest with
+# `--recreate` (destructive) or apply an explicit collection update.
+
+collection:
+  name: rag_documents
+  # Must match the embedding model dimension (see embedding_models.yaml).
+  vector_size: 384
+  distance: Cosine
+  replication_factor: 1
+  shard_number: 1
+
+  # Scalar int8 quantization keeps vectors in RAM at a quarter of the float32
+  # size. Rescoring stays exact, so recall loss is small for RAG payloads.
+  quantization:
+    type: scalar_int8
+    quantile: 0.99
+    always_ram: true
+
+  # HNSW graph parameters. m=16 / ef_construct=128 is the balanced default for
+  # corpora in the 10^5 - 10^7 chunk range.
+  hnsw:
+    m: 16
+    ef_construct: 128
+    # Segments below this size are searched exhaustively (10 000 KB = 10 MB).
+    full_scan_threshold_kb: 10000
+
+payload:
+  # Document text and metadata stay on disk; RAM is reserved for the graph.
+  on_disk: true
+
+search:
+  default_limit: 5
+  max_limit: 50
+  # Leave null to return every neighbour; set a floor (for example 0.35) once
+  # the corpus has been evaluated.
+  score_threshold: null
