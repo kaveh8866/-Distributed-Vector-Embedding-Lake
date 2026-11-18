@@ -23,6 +23,11 @@ The local stack was built and exercised end to end with the synthetic corpus
 (see `docs/stage-1-verification.txt`). No OCI infrastructure has been created
 yet; `terraform/` records the Stage 2 contract.
 
+CloudGuard portability audit: **`PORTABLE_CERTIFIED` — 100/100 (5/5 checks)**,
+audited 2026-11-18. The audit is structural (zero-leak, environment scaffold,
+documentation, Git isolation, containerization); it does not certify a cloud
+deployment.
+
 ---
 
 ## Architecture

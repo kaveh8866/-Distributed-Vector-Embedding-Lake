@@ -177,3 +177,38 @@ No container, port binding or background process from this project remains.
 - Qdrant logs a warning that an API key is used over plain HTTP. The connection
   is container-to-container on a private bridge network; TLS termination is a
   Stage 3/4 item.
+
+10. CloudGuard registration
+---------------------------
+The project was indexed by the CloudGuard portfolio scanner and attached to
+its own repository metadata:
+
+  slug        09-distributed-vector-embedding-lake
+  name        Distributed Vector & Embedding Lake
+  category    ai_pipeline
+  framework   FastAPI
+  tech stack  docker, docker-compose, fastapi, python, terraform
+  docker      true
+  iac         true (reserved terraform/ contract, no .tf resources yet)
+  branch      main
+  port        8085
+  state       clean tree, no unpushed detection failures
+
+The first official portability audit returned 80/100: the containerization
+check failed because the root compose entrypoint declared services only via
+`extends:`, while the audit requires an `image` or `build` key on a root
+service. Explicit image references were added to the root file, the change was
+committed, and the audit was re-run against the committed tree:
+
+  zero-leak audit           passed
+  environment scaffold      passed
+  documentation integrity   passed
+  git isolation             passed
+  containerization          passed
+
+  score   100/100
+  status  PORTABLE_CERTIFIED
+
+The certification is structural. It confirms the repository is leak-free,
+self-describing and runnable; it says nothing about cloud deployment, retrieval
+quality at scale or performance.
