@@ -23,6 +23,12 @@ The local stack was built and exercised end to end with the synthetic corpus
 (see `docs/stage-1-verification.txt`). No OCI infrastructure has been created
 yet; `terraform/` records the Stage 2 contract.
 
+**Stage 2 status — OCI infrastructure authored and validated:** three OpenTofu
+modules (network, compute, persistent block storage) plus a cloud-init mount
+bootstrap. `tofu validate` passes and a read-only `tofu plan` reports 8
+resources to add, 0 to change, 0 to destroy. Nothing has been applied, so there
+is still no running cloud host (see `docs/stage-2-verification.txt`).
+
 CloudGuard portability audit: **`PORTABLE_CERTIFIED` — 100/100 (5/5 checks)**,
 audited 2026-11-18. The audit is structural (zero-leak, environment scaffold,
 documentation, Git isolation, containerization); it does not certify a cloud
@@ -77,7 +83,7 @@ configs/
   vector_db.yaml            collection shape, HNSW, quantization
   embedding_models.yaml     supported models, dimensions, chunking rationale
   datasets/                 synthetic corpus and labelled evaluation queries
-terraform/                  reserved OCI infrastructure contract (Stage 2)
+terraform/                  OCI VCN, A1.Flex compute and block volume (Stage 2)
 tests/                      dependency-free unit tests
 ```
 

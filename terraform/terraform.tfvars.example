@@ -1,0 +1,98 @@
+# =============================================================================
+# Distributed Vector & Embedding Lake — tfvars template
+# =============================================================================
+# Copy to terraform.tfvars (gitignored) and replace every placeholder:
+#
+#   cp terraform.tfvars.example terraform.tfvars
+#   chmod 600 terraform.tfvars
+#
+# Nothing here is a working value: the OCIDs are placeholders, the CIDRs are
+# RFC 5737 documentation ranges, and the SSH key is not a valid key. Never
+# commit terraform.tfvars.
+
+# -----------------------------------------------------------------------------
+# OCI identity — real OCIDs belong only in terraform.tfvars
+# -----------------------------------------------------------------------------
+
+tenancy_ocid     = "ocid1.tenancy.oc1..replace-with-your-tenancy-ocid"
+compartment_ocid = "ocid1.compartment.oc1..replace-with-your-compartment-ocid"
+region           = "eu-frankfurt-1"
+
+# API-key auth. Leave these null to use ~/.oci/config (recommended on a
+# workstation). A CI runner sets user_ocid/fingerprint/private_key_path from its
+# secret store instead; the key path must live outside this repository.
+config_file_profile = "DEFAULT"
+user_ocid           = null
+fingerprint         = null
+private_key_path    = null
+
+# -----------------------------------------------------------------------------
+# Naming
+# -----------------------------------------------------------------------------
+
+project_name = "vector-lake"
+environment  = "dev"
+
+freeform_tags = {
+  project  = "distributed-vector-embedding-lake"
+  owner    = "cloudguard"
+  tier     = "high-spec"
+  workload = "vector-database"
+}
+
+# -----------------------------------------------------------------------------
+# Network — replace the documentation ranges with the operator's real CIDRs
+# -----------------------------------------------------------------------------
+
+vcn_cidr    = "10.9.0.0/16"
+subnet_cidr = "10.9.1.0/24"
+
+# Operator workstation or VPN range for SSH.
+ssh_allowed_cidrs = ["203.0.113.10/32"]
+
+# Application ranges allowed to reach the vector API. Prefer a private subnet
+# or VPN range; a public /32 is acceptable only for a short verification window.
+vector_api_cidrs = ["203.0.113.10/32"]
+
+# Qdrant: 6333 REST + 6334 gRPC.
+# Milvus alternative: [19530] (gRPC/SDK), optionally 9091 for metrics.
+# List only ports that actually listen; never add 0.0.0.0/0 as a source.
+vector_db_ports = [6333, 6334]
+
+# -----------------------------------------------------------------------------
+# Compute — 4 OCPU / 24 GB is the Always Free A1 ceiling
+# -----------------------------------------------------------------------------
+
+instance_shape      = "VM.Standard.A1.Flex"
+instance_ocpus      = 4
+instance_memory_gbs = 24
+
+# 100 GB boot holds the OS, Docker and container images only.
+boot_volume_size_gbs = 100
+
+# Pin an AD when A1 is capacity constrained: e.g. "jiTx:EU-FRANKFURT-1-AD-1".
+# availability_domain = null
+
+hostname_label = "vectorlake"
+
+# Public key CONTENT (not a path). Generate a dedicated key pair:
+#   ssh-keygen -t ed25519 -f ~/.ssh/vector-lake -C "vector-lake"
+#   cat ~/.ssh/vector-lake.pub
+ssh_public_key = "ssh-ed25519 PLACEHOLDER_PUBLIC_KEY operator@example.invalid"
+
+# Optional: pin an image OCID for reproducible rebuilds.
+# image_id                    = "ocid1.image.oc1..replace-with-image-ocid"
+image_operating_system         = "Canonical Ubuntu"
+image_operating_system_version = "24.04"
+
+# -----------------------------------------------------------------------------
+# Persistent block storage
+# -----------------------------------------------------------------------------
+
+# 200 GB holds Qdrant segments, WAL, payloads and one snapshot generation.
+# Always Free covers 200 GB TOTAL: boot 100 + data 200 consumes trial credit.
+block_volume_size_gbs   = 200
+block_volume_vpus_per_gb = 10
+
+volume_attachment_type = "paravirtualized"
+volume_mount_point     = "/mnt/vector-lake"

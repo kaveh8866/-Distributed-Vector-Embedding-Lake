@@ -1,0 +1,129 @@
+Project — Distributed Vector & Embedding Lake
+Stage 2 — IaC provisioning with OpenTofu
+Date: 2026-11-18
+Region: eu-frankfurt-1
+Tooling: OpenTofu 1.13.9 (windows_amd64), OCI provider 7.32.0 (locked)
+Scope: author, format, validate and plan the OCI infrastructure. No apply, no
+resource created, no cost incurred.
+
+1. What was added
+-----------------
+terraform/
+  versions.tf              provider constraints + documented remote backends
+  provider.tf              OCI API-key auth via ~/.oci/config or inline fields
+  variables.tf             provider-neutral input contract with validations
+  main.tf                  module wiring + cloud-init template
+  outputs.tf               addresses, volume details, exposure inventory
+  cloud-init.yaml.tftpl    block-volume discovery, format, mount, layout
+  terraform.tfvars.example placeholder-only template
+  modules/network/         VCN, IGW, route table, security list, public subnet
+  modules/compute/         A1.Flex instance + Ubuntu image resolution
+  modules/storage/         block volume + paravirtualized attachment
+
+2. Static verification
+----------------------
+tofu init
+  Successfully initialized; provider oracle/oci 7.32.0 installed and locked in
+  .terraform.lock.hcl (the lock file is committed; .terraform/ is gitignored).
+
+tofu fmt -recursive
+  reformatted main.tf (attribute alignment) and returned exit 0
+
+tofu fmt -recursive -check
+  exit 0 (no remaining formatting drift)
+
+tofu validate
+  Success! The configuration is valid.
+  exit 0
+
+A first init attempt failed with "Provider type mismatch" on module.storage:
+the module had no required_providers block, so OpenTofu inferred hashicorp/oci
+while the root uses oracle/oci. Each module now declares the provider source in
+modules/<name>/versions.tf. Re-init and validate are clean.
+
+3. Cloud-init template rendering
+--------------------------------
+templatefile() was evaluated directly in `tofu console` with the real inputs:
+the rendered document starts with #cloud-config and contains the mount script
+and systemd unit. Template syntax errors would have failed here or in plan.
+
+4. Read-only plan
+-----------------
+terraform.tfvars was generated locally from the operator's existing OCI values
+(gitignored, never printed, never staged). Provider authentication used the
+workstation's ~/.oci/config profile, the same mechanism Stage 3 will use.
+
+tofu plan -input=false
+  Plan: 8 to add, 0 to change, 0 to destroy.
+
+  module.network.oci_core_vcn.this               will be created
+  module.network.oci_core_internet_gateway.this  will be created
+  module.network.oci_core_route_table.public     will be created
+  module.network.oci_core_security_list.public   will be created
+  module.network.oci_core_subnet.public          will be created
+  module.compute.oci_core_instance.this          will be created
+  module.storage.oci_core_volume.vector          will be created
+  module.storage.oci_core_volume_attachment.vector will be created
+
+The plan also resolved the Ubuntu 24.04 aarch64 image for VM.Standard.A1.Flex
+and produced the VNIC data-source reads. No warning or deprecation was emitted.
+
+5. Ingress composition (as planned)
+-----------------------------------
+22/tcp    from ssh_allowed_cidrs   one rule per CIDR
+6333/tcp  from vector_api_cidrs    Qdrant REST
+6334/tcp  from vector_api_cidrs    Qdrant gRPC
+(none)    19530 documented for a Milvus-compatible port; add it to
+          vector_db_ports to open it — nothing listens on it in this stack
+
+Sources are validated at plan time: both lists reject 0.0.0.0/0 and ::/0, so a
+world-open database port cannot be applied by accident. Egress is explicit
+(80/tcp, 443/tcp, 53/udp) with no catch-all rule.
+
+6. Compute and storage shape
+----------------------------
+instance  VM.Standard.A1.Flex, 4 OCPU / 24 GB, Ubuntu 24.04 aarch64
+boot      100 GB (OS, Docker, images)
+data      200 GB block volume, 10 VPUs/GB (Balanced), paravirtualized
+mount     /mnt/vector-lake via ext4 label "vectorlake"
+layout    /mnt/vector-lake/storage/qdrant and /mnt/vector-lake/storage/snapshots
+
+The volume is independent of the instance lifecycle; `tofu destroy` deletes it,
+which is why the storage module documents adding prevent_destroy before real
+corpus data lands.
+
+7. Portability
+--------------
+Root variable and output names are provider neutral; only provider.tf and the
+three module bodies are OCI specific. Each file carries the mapping:
+
+  VCN/IGW/route table/security list/subnet  -> VPC/IGW/route table/SG/subnet
+                                            -> VPC network/route/firewall/subnetwork
+  oci_core_instance A1.Flex                 -> aws_instance t4g.xlarge
+                                            -> google_compute_instance t2a-standard-4
+  oci_core_volume + attachment              -> aws_ebs_volume gp3 + attachment
+                                            -> google_compute_disk pd-balanced + attached disk
+  metadata.user_data (base64)               -> user_data / metadata_startup_script
+
+State backends documented in versions.tf: OCI Object Storage (S3-compatible),
+AWS S3 + DynamoDB, GCS.
+
+8. Git boundary
+---------------
+Tracked: .tf, .tftpl, .tfvars.example, .terraform.lock.hcl, doc.
+Ignored and confirmed with git check-ignore:
+  .terraform/            .gitignore line 76
+  *.tfstate              .gitignore line 77
+  terraform.tfvars       .gitignore line 79
+The plan log was deleted after extracting the summary; it contained resource
+identifiers. No OCID, key or credential appears in any tracked file.
+
+9. Not done in Stage 2
+----------------------
+- No tofu apply: the plan is reviewed, not deployed. Stage 3 performs the live
+  apply, cloud-init wait, mount verification and container deployment.
+- A1 capacity is unverified; "Out of host capacity" can still block Stage 3 and
+  may require pinning another availability domain.
+- The cloud-init mount path has not run on a real host; the device names it
+  probes are the documented OCI paravirtualized/NVMe paths.
+- No snapshot/restore, benchmark or cost measurement exists yet.
