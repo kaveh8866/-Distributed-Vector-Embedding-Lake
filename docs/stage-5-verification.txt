@@ -1,0 +1,206 @@
+Project — Distributed Vector & Embedding Lake
+Stage 5 — cloud deployment and integration on OCI
+Date: 2026-11-18
+Region: eu-frankfurt-1 (tenancy root compartment)
+Scope: apply the Stage 2 OpenTofu configuration to Oracle Cloud Infrastructure,
+mount the persistent block volume on the host, deploy the committed stack,
+ingest the corpus and run live retrieval against the cloud host.
+No credential, key or .env value appears in this file.
+
+1. Provisioning
+---------------
+Tooling: OpenTofu 1.13.9, oracle/oci provider 7.32.0 (lock file committed).
+Auth: ~/.oci/config profile DEFAULT + API signing key outside the repository;
+terraform.tfvars (gitignored) carries the OCIDs, operator /32 and public key.
+
+  tofu init && tofu validate          -> valid
+  tofu plan -out=stage5.tfplan        -> Plan: 8 to add, 0 to change, 0 to destroy
+  tofu apply stage5.tfplan            -> network: 5 resources created
+                                          (VCN, IGW, route table, security list, subnet)
+
+Compute capacity
+----------------
+The first apply failed at the instance:
+
+  Error: 500-InternalError, Out of host capacity.
+  Service: Core Instance, Operation Name: LaunchInstance
+  OPC request ID: 5f0ca83b97448b0ea7ee965efe785f84/3AAF.../4354...
+
+VM.Standard.A1.Flex (4 OCPU / 24 GB) was attempted in all three availability
+domains of eu-frankfurt-1, twice, 45 s apart (6 attempts): every attempt
+returned "Out of host capacity". This is an A1 pool shortage in the region, not
+a service-limit or configuration error.
+
+Ampere fallback that succeeded first try:
+
+  VM.Standard.A2.Flex (AmpereOne, 4 OCPU / 24 GB) in jiTx:EU-FRANKFURT-1-AD-1
+  tofu apply -> Apply complete! Resources: 3 added
+               (instance, block volume, volume attachment)
+
+The fallback keeps the requirement (ARM Ampere, high RAM) and stays inside the
+operating system images already validated (Canonical Ubuntu 24.04 aarch64).
+The A1 attempt is recorded here as the reason the deployed shape is A2.
+
+Outputs captured at apply time:
+
+  instance_public_ip        92.5.95.252
+  instance_private_ip       10.9.1.125
+  instance_shape            VM.Standard.A2.Flex (4 OCPU / 24 GB)
+  availability_domain       jiTx:EU-FRANKFURT-1-AD-1
+  image                     Canonical-Ubuntu-24.04-aarch64-2026.11.05-0
+  instance_id               ocid1.instance.oc1.eu-frankfurt-1.antheljs2aepjfacrj3binwcylbxt6ck5p6duthmjxpbqzodetqbvjwsgcha
+  block_volume_id           ocid1.volume.oc1.eu-frankfurt-1.abtheljsgdr5suao3afmiplicurjuxvt244xehpi6fg2pv5haslutwzx2rva
+  block_volume_attachment   ocid1.volumeattachment.oc1.eu-frankfurt-1.antheljs2aepjfacwz6cfzcr7armkqimg5ufagxcw4zmzweo63z7m2h44xoq
+  block_volume_size_gbs     200
+  block_volume_vpus_per_gb  10 (Balanced)
+  block_volume_mount_point  /mnt/vector-lake
+  ingress_ports             22, 6333, 6334
+  ingress_exposure          each port -> 80.131.213.122/32 only (operator)
+
+No 0.0.0.0/0 rule exists; the plan-time validation rejects one.
+
+2. Host preparation
+-------------------
+SSH: ubuntu@92.5.95.252 with the operator ed25519 key (matches the authorized
+key in instance metadata). The workstation egress address is the /32 admitted by
+the security list.
+
+  cloud-init status --wait -> done
+  host: 23 GiB RAM (8 visible cores), Canonical Ubuntu 24.04 aarch64
+
+Defect 1 — block device discovery
+---------------------------------
+The 200 GB volume attached as /dev/sdb, but cloud-init looked only for
+/dev/oracleoci/oraclevdb and /dev/nvme1n1; the oracleoci udev alias is absent on
+this image, so vector-lake-mount failed and /mnt/vector-lake did not exist.
+
+Fix in terraform/cloud-init.yaml.tftpl: after the known device paths, fall back
+to every whole disk that is not the root disk and does not carry vfat/iso9660.
+Re-ran the unit on the host:
+
+  unit: active
+  /dev/sdb  196G  40K  186G  1%  /mnt/vector-lake
+  LABEL=vectorlake /mnt/vector-lake ext4 defaults,nofail,noatime 0 2
+
+Defect 2 — Qdrant could not write to the volume
+-----------------------------------------------
+The first container start failed with:
+
+  Failed to write file: Permission denied (os error 13) at path "/qdrant/storage/.atomicwrite..."
+
+Qdrant runs as root but the compose service drops all capabilities
+(cap_drop: ALL), which removes CAP_DAC_OVERRIDE; the mounted directory was owned
+by uid 1000, so root could not create files in it. Verified by running the same
+image with and without the capability drop against the same directory.
+
+Fix: keep the mount point operator-owned (uid 1000) and hand the Qdrant data
+directories to root, 0750. This is now part of cloud-init so a rebuilt host
+never hits it, and it was applied to the running host.
+
+3. Remote deployment
+--------------------
+Docker Engine 29.1.3 and Compose 2.40.3 installed from the Ubuntu archive;
+ubuntu added to the docker group.
+
+Code transfer: the local branch is ahead of origin, so the committed tree was
+shipped as `git archive HEAD` (65 files) rather than cloned from GitHub. On the
+host, `git init` keeps the directory a repository for later pulls.
+
+.env on the host (mode 600, never committed):
+  VECTOR_STORAGE_DIR=/mnt/vector-lake/storage/qdrant
+  VECTOR_SNAPSHOT_DIR=/mnt/vector-lake/storage/snapshots
+  EMBEDDING_PROVIDER=fastembed
+  EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+  VLAKE_EXTRAS=[semantic]
+  FASTEMBED_THREADS=4
+  API_CPUS=4
+  API_PORT=8085
+  QDRANT_API_KEY=<generated on the host with 48 hex characters>
+
+Image build on aarch64:
+  cloudguard/vector-lake:local, fastembed 0.9.1, onnxruntime 1.32.0
+
+Schema and ingest:
+  vlake.schema         -> rag_documents created, 384 dims, Cosine, INT8,
+                          HNSW m=16 / ef_construct=128, status green
+  ingest-worker        -> 10 documents, 10 chunks, 449.8 chars average,
+                          embedder fastembed:all-MiniLM-L6-v2, points_written 10
+
+Services:
+  cg-vector-qdrant  Up (healthy)  127.0.0.1:6333
+  cg-vector-api     Up (healthy)  127.0.0.1:8085
+
+4. Live verification
+--------------------
+Health, from the host:
+  GET /health -> {"status":"ok","version":"0.1.0"} 200
+  GET /ready  -> {"status":"ready","collection":"rag_documents"} 200
+
+Because the security list admits only 22/6333/6334 and both container ports bind
+loopback, the operator path is an SSH tunnel:
+
+  ssh -N -L 18085:127.0.0.1:8085 ubuntu@92.5.95.252
+
+Through that tunnel, from the workstation, scripts/verify_local.py with 8
+labelled queries x 5 repeats (40 requests):
+
+  failures      0
+  recall@5      1.0
+  service p50   10.28 ms | p95 11.35 ms | max 12.12 ms | mean 10.33 ms
+  end-to-end    p50 54.92 ms | p95 56.32 ms (adds ~40 ms Frankfurt RTT + tunnel)
+
+vlake.evaluation on the host: 8 cases, recall_at_k 1.0, mrr 1.0.
+
+RAG assembly: 4 citations (doc-vector-quantization::0000,
+doc-embedding-dimensions::0000, doc-oci-flex-shapes::0000,
+doc-qdrant-architecture::0000), 2097-char context, 2322-char prompt.
+
+Thread tuning (same corpus, same host, measured):
+  1 ONNX thread / 1 CPU   p50 23.80 ms, p95 27.19 ms
+  2 threads / 2 CPUs      p50 14.61 ms, p95 17.80 ms
+  4 threads / 4 CPUs      p50 10.47 ms, p95 12.30 ms   <- deployed setting
+The 4-OCPU host has headroom (Qdrant uses ~0.1% CPU at rest), so the API gets
+the whole shape's cores.
+
+Resource envelope during the run:
+  qdrant  28.4 MiB / 8 GiB limit
+  api    217.9 MiB / 2 GiB limit
+  host     1.0 GiB used of 23 GiB
+  volume   552 KiB of 196 GiB used (10 points)
+
+5. Persistence
+--------------
+`docker restart cg-vector-qdrant` then `vlake.schema --inspect`:
+  points_count 10, status green, optimizer ok
+Data lives in /mnt/vector-lake/storage/qdrant on /dev/sdb (ext4 label
+vectorlake, fstab by label, nofail), so it survives container restart, host
+reboot and instance replacement. The volume is independent of the instance
+lifecycle, but `tofu destroy` would delete it — see the MANUAL_PREREQS data
+safety note.
+
+6. Pending infrastructure diff (deliberate)
+------------------------------------------
+Both host fixes are now in `terraform/cloud-init.yaml.tftpl`, and `user_data` is
+a force-new attribute. `tofu plan` therefore reports:
+
+  Plan: 2 to add, 0 to change, 2 to destroy
+  (instance replacement + its volume attachment)
+
+The block volume is not in that diff, so its data would survive. The replacement
+was NOT applied: doing so would destroy the only working host to test a template
+that already has a verified manual equivalent on that host (the mount unit and
+directory ownership were applied there directly). Exercise it on the next
+rebuild or in a second environment. Until then, do not claim the new cloud-init
+has booted.
+
+7. Not verified
+---------------
+- A1.Flex was never obtained; the deployed shape is A2.Flex. No Always-Free
+  claim is made for this instance.
+- 10 synthetic documents / 10 chunks is a pipeline check, not quality at scale.
+- Single-node Qdrant only: no sharding, no replica, no snapshot/restore drill
+  (Stage 6), no sustained load test or concurrency benchmark.
+- Ports 6333/6334 are admitted by the security list but the containers bind
+  loopback, so they are reachable only inside the host or through a tunnel.
+  That is intentional; publishing the database was not attempted.
+- The instance was left running for the next stage; no destroy was performed.

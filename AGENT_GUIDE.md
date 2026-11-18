@@ -5,8 +5,10 @@ terminal agent) picking up this repository. It states what to run, in what
 order, what healthy looks like, and what is verified versus assumed.
 
 > **Read section 13 before making any availability or certification claim.** The
-> stack is verified locally (Stage 4, semantic retrieval); the OCI certification
-> run is Stage 5 and has not happened yet.
+> stack is verified locally (Stage 4) and deployed on OCI (Stage 5). The live
+> claims in this repository are limited to the evidence in
+> `docs/stage-5-verification.txt` — a single A2.Flex node with a 10-document
+> corpus, not scale or availability certification.
 
 ## 1. Current state
 
@@ -14,8 +16,8 @@ order, what healthy looks like, and what is verified versus assumed.
 | --- | --- | --- |
 | Container topology, worker, API, evaluation | Verified locally | `docs/stage-1-verification.txt` (live Qdrant, recall@5 0.875 lexical) |
 | Schema init, semantic ingestion, retrieval, latency | Verified locally (Stage 4) | `docs/stage-4-verification.txt`, `docs/stage-4-report.json` (21 unit tests, recall@5 1.0, MRR 1.0, p95 8.41 ms) |
-| OCI infrastructure modules | Authored and validated, **not applied** | `docs/stage-2-verification.txt` (`tofu validate`, plan: 8 to add) |
-| Live OCI deployment | **Pending** | none — do not claim it |
+| OCI infrastructure modules | **Applied** (8 resources, eu-frankfurt-1) | `docs/stage-5-verification.txt` (apply output, IDs, security list) |
+| Live OCI deployment | Verified 2026-11-18 on `VM.Standard.A2.Flex` | `docs/stage-5-verification.txt`, `docs/stage-5-report.json` (healthy host, 10 points, recall@5 1.0, p95 11.35 ms) |
 
 The local stack was stopped after verification. `storage/` (vector segments) is
 retained on the workstation and gitignored. No OCI resource exists.
@@ -329,12 +331,15 @@ using trial credits with high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex
 supported ports, not certified targets: no AWS or GCP certification run is made
 or implied.
 
-**Status.** The OCI certification run is Stage 5. Today the infrastructure is
-validated (`tofu validate`; plan: 8 to add, 0 to change) but **not applied**, and
-the local container run (Stage 4, semantic ONNX retrieval) is the only executed
-verification. Until Stage 5 records cloud-init, mount, healthy services and live
-ingest/search evidence, do not describe the project as deployed, certified on
-OCI, benchmarked, or production-ready.
+**Status.** The OCI run is Stage 5 and executed 2026-11-18: eight resources
+applied in `eu-frankfurt-1`, block volume mounted at `/mnt/vector-lake`, the
+stack healthy, and live ingest plus retrieval verified through an SSH tunnel
+(`docs/stage-5-verification.txt`). Two constraints keep this short of a
+certification claim: A1.Flex was out of capacity in all three availability
+domains, so the host is `VM.Standard.A2.Flex` (4 OCPU / 24 GB, AmpereOne), and
+the corpus is 10 synthetic documents on a single node with no load, failover or
+snapshot drill. Do not describe the project as production-ready, highly
+available, or benchmarked at scale; those are Stage 6 and 7.
 
 ## 14. Stage roadmap
 
@@ -344,7 +349,7 @@ OCI, benchmarked, or production-ready.
 | 2 | OCI network, compute, block volume, cloud-init | `fmt`, `validate`, read-only plan — **done** |
 | 3 | Agent guide and manual prerequisites | docs complete, links valid, committed — **done** |
 | 4 | Local testing: schema, semantic ingest, retrieval, latency | recall@k / latency recorded, no OOM — **done** (`docs/stage-4-verification.txt`) |
-| 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search |
+| 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Scale and recovery | snapshot/restore drill, load test, monitoring |
 | 7 | Quality and cost report | recall@k / MRR / latency / memory at target scale |
 

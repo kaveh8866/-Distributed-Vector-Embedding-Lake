@@ -1,0 +1,156 @@
+{
+  "base_url": "http://127.0.0.1:18085",
+  "collection": "rag_documents",
+  "queries": 8,
+  "repeats": 5,
+  "k": 5,
+  "requests": 40,
+  "failures": 0,
+  "recall_at_k": 1.0,
+  "latency_ms": {
+    "p50": 10.28,
+    "p95": 11.35,
+    "max": 12.12,
+    "mean": 10.33
+  },
+  "end_to_end_ms": {
+    "p50": 54.92,
+    "p95": 56.32,
+    "max": 57.65,
+    "mean": 54.95,
+    "note": "host wall clock including the local port proxy"
+  },
+  "rag": {
+    "citations": [
+      "doc-vector-quantization::0000",
+      "doc-embedding-dimensions::0000",
+      "doc-oci-flex-shapes::0000",
+      "doc-qdrant-architecture::0000"
+    ],
+    "context_chars": 2097,
+    "prompt_chars": 2322
+  },
+  "results": [
+    {
+      "query": "how does scalar quantization reduce memory usage",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-vector-quantization",
+        "doc-embedding-dimensions",
+        "doc-oci-flex-shapes",
+        "doc-qdrant-architecture",
+        "doc-hnsw-parameters"
+      ],
+      "relevant_doc_ids": [
+        "doc-vector-quantization"
+      ],
+      "p50_ms": 55.34
+    },
+    {
+      "query": "which HNSW parameters trade recall for latency",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-hnsw-parameters",
+        "doc-qdrant-architecture",
+        "doc-rag-evaluation",
+        "doc-vector-quantization",
+        "doc-oci-flex-shapes"
+      ],
+      "relevant_doc_ids": [
+        "doc-hnsw-parameters"
+      ],
+      "p50_ms": 54.32
+    },
+    {
+      "query": "how large should RAG chunks be and how much overlap",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-rag-chunking",
+        "doc-oci-flex-shapes",
+        "doc-ingestion-idempotency",
+        "doc-embedding-dimensions",
+        "doc-oci-block-storage"
+      ],
+      "relevant_doc_ids": [
+        "doc-rag-chunking"
+      ],
+      "p50_ms": 54.39
+    },
+    {
+      "query": "how do I measure retrieval quality",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-rag-evaluation",
+        "doc-qdrant-architecture",
+        "doc-hnsw-parameters",
+        "doc-embedding-dimensions",
+        "doc-ingestion-idempotency"
+      ],
+      "relevant_doc_ids": [
+        "doc-rag-evaluation"
+      ],
+      "p50_ms": 53.7
+    },
+    {
+      "query": "persistent block volume for vector segments and snapshots",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-oci-block-storage",
+        "doc-backup-snapshots",
+        "doc-qdrant-architecture",
+        "doc-vector-quantization",
+        "doc-oci-flex-shapes"
+      ],
+      "relevant_doc_ids": [
+        "doc-oci-block-storage",
+        "doc-backup-snapshots"
+      ],
+      "p50_ms": 54.89
+    },
+    {
+      "query": "safe repeated ingestion without duplicate points",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-ingestion-idempotency",
+        "doc-backup-snapshots",
+        "doc-qdrant-architecture",
+        "doc-rag-chunking",
+        "doc-vector-quantization"
+      ],
+      "relevant_doc_ids": [
+        "doc-ingestion-idempotency"
+      ],
+      "p50_ms": 55.3
+    },
+    {
+      "query": "Ampere A1 memory split between database and workers",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-oci-flex-shapes",
+        "doc-oci-block-storage",
+        "doc-ingestion-idempotency",
+        "doc-embedding-dimensions",
+        "doc-rag-evaluation"
+      ],
+      "relevant_doc_ids": [
+        "doc-oci-flex-shapes"
+      ],
+      "p50_ms": 55.66
+    },
+    {
+      "query": "embedding dimension storage cost for ten million chunks",
+      "recall_at_k": 1.0,
+      "top_doc_ids": [
+        "doc-embedding-dimensions",
+        "doc-oci-flex-shapes",
+        "doc-vector-quantization",
+        "doc-rag-chunking",
+        "doc-oci-block-storage"
+      ],
+      "relevant_doc_ids": [
+        "doc-embedding-dimensions"
+      ],
+      "p50_ms": 55.72
+    }
+  ]
+}

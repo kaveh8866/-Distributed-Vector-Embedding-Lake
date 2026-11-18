@@ -4,10 +4,10 @@ Checklist for the human operator **before** any deployment script runs. Complete
 every section in order; each ends with a verification command. If a check fails,
 stop and fix it — do not let an agent improvise around a missing prerequisite.
 
-> **Status.** No OCI resource exists yet. The infrastructure is validated
-> (`tofu validate`, plan: 8 to add) and the container stack is verified locally,
-> including semantic retrieval (`docs/stage-4-verification.txt`). The live run
-> is Stage 5 and needs the items below.
+> **Status.** The Stage 5 run created this project's OCI resources
+> (`docs/stage-5-verification.txt`) and the stack is live on the host. Keep this
+> checklist for a rebuild or a second environment: it describes exactly what a
+> fresh apply needs, including the capacity caveat below.
 
 ## Cloud portability and certification scope
 
@@ -230,6 +230,12 @@ The IaC creates and attaches the volume; cloud-init formats it **only if it has
 no filesystem**, mounts it by ext4 label `vectorlake`, adds an `nofail` fstab
 entry and creates the data layout.
 
+Capacity caveat: `VM.Standard.A1.Flex` returned "Out of host capacity" in all
+three eu-frankfurt-1 availability domains on 2026-11-18. The applied shape is
+`VM.Standard.A2.Flex` (AmpereOne, 4 OCPU / 24 GB). If you need A1, pin another
+AD, retry over hours, or request a capacity reservation; do not silently switch
+to an x86 shape.
+
 Expected on the host after the Stage 5 apply:
 
 ```bash
@@ -239,8 +245,13 @@ systemctl status vector-lake-mount --no-pager
 ls -la /mnt/vector-lake/storage
 ```
 
-- [ ] `/mnt/vector-lake` is mounted with label `vectorlake`.
-- [ ] `storage/qdrant` and `storage/snapshots` exist and are owned by uid 1000.
+- [ ] `/mnt/vector-lake` is mounted with label `vectorlake` (device may be
+  `/dev/sdb` when the oracleoci udev alias is absent; cloud-init enumerates
+  every non-root disk).
+- [ ] `storage/qdrant` and `storage/snapshots` exist, are owned by **root** with
+  mode 0750, and the mount point itself is owned by uid 1000. Qdrant runs with
+  `cap_drop: ALL`, so it has no CAP_DAC_OVERRIDE and cannot write into a uid-1000
+  directory (observed as a startup permission error).
 - [ ] The mount unit is `active (exited)`.
 - [ ] A reboot keeps the mount (fstab `nofail`) — verify during Stage 5.
 

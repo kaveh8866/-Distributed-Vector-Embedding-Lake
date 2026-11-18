@@ -8,6 +8,9 @@
 #
 # Device discovery:
 #   paravirtualized  -> /dev/oracleoci/oraclevdb (first data volume)
+#   Ampere A2 / some images -> plain /dev/sdb or /dev/vdb (no oracleoci udev
+#   alias until oracle-cloud-agent is installed, so a fallback enumerates every
+#   disk that is not the boot disk)
 #   NVMe shapes      -> /dev/nvme1n1
 # A device that already carries a filesystem is reused, never reformatted.
 # The volume is mounted by ext4 label so it survives device-name reordering.
@@ -30,17 +33,34 @@ write_files:
 
       log() { echo "vector-lake: $*"; }
 
+      usable_disk() {
+        local candidate="$1" existing_type
+        [ -b "$candidate" ] || return 1
+        # Never touch a config drive or an ISO.
+        existing_type="$(blkid -s TYPE -o value "$candidate" 2>/dev/null || true)"
+        if [ "$existing_type" = "vfat" ] || [ "$existing_type" = "iso9660" ]; then
+          return 1
+        fi
+        # Skip the disk that carries the mounted root filesystem.
+        if lsblk -no MOUNTPOINT "$candidate" 2>/dev/null | grep -q .; then
+          return 1
+        fi
+        echo "$candidate"
+        return 0
+      }
+
       discover_device() {
-        local candidate existing_type
+        local candidate root_disk
         for candidate in /dev/oracleoci/oraclevdb /dev/oracleoci/oraclevdc /dev/nvme1n1; do
-          [ -b "$candidate" ] || continue
-          # Never touch a config drive or an ISO.
-          existing_type="$(blkid -s TYPE -o value "$candidate" 2>/dev/null || true)"
-          if [ "$existing_type" = "vfat" ] || [ "$existing_type" = "iso9660" ]; then
-            continue
-          fi
-          echo "$candidate"
-          return 0
+          if usable_disk "$candidate"; then return 0; fi
+        done
+
+        # Fallback for images without the oracleoci udev aliases: every whole
+        # disk except the one holding / (e.g. /dev/sdb on Ampere A2).
+        root_disk="/dev/$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" | head -1)"
+        for candidate in $(lsblk -dpno NAME,TYPE | awk '$2 == "disk" {print $1}'); do
+          [ "$candidate" = "$root_disk" ] && continue
+          if usable_disk "$candidate"; then return 0; fi
         done
         return 1
       }
@@ -75,10 +95,15 @@ write_files:
       fi
 
       # Layout consumed by docker/docker-compose.yml via VECTOR_STORAGE_DIR and
-      # VECTOR_SNAPSHOT_DIR. uid/gid 1000 is the ubuntu user and matches the
-      # operator's ability to manage the stack without sudo.
+      # VECTOR_SNAPSHOT_DIR. The mount point stays operator-owned (uid 1000) so
+      # the stack can be managed without root, but the Qdrant data directories
+      # belong to root: the container runs as root with `cap_drop: ALL`, which
+      # removes CAP_DAC_OVERRIDE, so it cannot write into a uid-1000 directory
+      # (observed: "Permission denied (os error 13) at /qdrant/storage").
       mkdir -p "$MOUNT_POINT/storage/qdrant" "$MOUNT_POINT/storage/snapshots"
       chown -R 1000:1000 "$MOUNT_POINT"
+      chown -R 0:0 "$MOUNT_POINT/storage/qdrant" "$MOUNT_POINT/storage/snapshots"
+      chmod 750 "$MOUNT_POINT/storage/qdrant" "$MOUNT_POINT/storage/snapshots"
 
       log "$DEVICE mounted at $MOUNT_POINT for $PROJECT_NAME"
 

@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/service-Python%203.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/api-FastAPI-009688?logo=fastapi&logoColor=white)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu-844FBA?logo=opentofu&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-4%20%C2%B7%20local%20verification-blue)
+![Stage](https://img.shields.io/badge/stage-5%20%C2%B7%20deployed%20on%20OCI-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A vector database and embedding pipeline for large-scale retrieval-augmented
@@ -35,6 +35,13 @@ and retrieval scored **recall@5 1.0 / MRR 1.0** on the labelled query set with
 service-side latency **p50 6.98 ms / p95 8.41 ms**. A RAG prompt with verified
 citations was assembled from the hits. See `docs/stage-4-verification.txt` and
 `docs/stage-4-report.json`.
+
+**Stage 5 — live on OCI:** eight resources applied in `eu-frankfurt-1`
+(`VM.Standard.A2.Flex`, 4 OCPU / 24 GB Ampere, 200 GB Balanced block volume at
+`/mnt/vector-lake`), the stack runs healthy on the host, and live retrieval over
+an SSH tunnel scored **recall@5 1.0 / MRR 1.0** with **p50 10.28 ms / p95 11.35
+ms** service-side (40 requests). A1.Flex was unavailable in all three ADs, so the
+deployed shape is Ampere A2. See `docs/stage-5-verification.txt`.
 
 CloudGuard portability audit: **`PORTABLE_CERTIFIED` — 100/100 (5/5 checks)**,
 audited 2026-11-18. The audit is structural (zero-leak, environment scaffold,
@@ -261,7 +268,7 @@ docker compose --env-file .env -f docker/docker-compose.yml config -q
 | 2 | OCI OpenTofu: VCN, NSG, A1.Flex / Standard3.Flex, persistent block volume, cloud-init |
 | 3 | Agent guide and manual prerequisites |
 | 4 | Local testing: schema init, semantic ingestion, retrieval/latency verification |
-| 5 | Live deployment and end-to-end verification on OCI with the real corpus |
+| 5 | Live deployment and end-to-end verification on OCI — **done** (`docs/stage-5-verification.txt`) |
 | 6 | Scale-out: sharding, snapshot/restore drill, monitoring, capacity test |
 | 7 | Retrieval quality and cost report (recall@k, MRR, latency, memory) |
 
