@@ -4,7 +4,7 @@
 ![Python](https://img.shields.io/badge/service-Python%203.12-3776AB?logo=python&logoColor=white)
 ![FastAPI](https://img.shields.io/badge/api-FastAPI-009688?logo=fastapi&logoColor=white)
 ![OpenTofu](https://img.shields.io/badge/IaC-OpenTofu-844FBA?logo=opentofu&logoColor=white)
-![Stage](https://img.shields.io/badge/stage-1%20%C2%B7%20scaffold-blue)
+![Stage](https://img.shields.io/badge/stage-4%20%C2%B7%20local%20verification-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 
 A vector database and embedding pipeline for large-scale retrieval-augmented
@@ -20,14 +20,21 @@ run it locally ships in this repository.
 **Stage 1 status — scaffold complete:** the container topology, configuration
 schema, ingestion worker, retrieval API and evaluation loop exist and validate.
 The local stack was built and exercised end to end with the synthetic corpus
-(see `docs/stage-1-verification.txt`). No OCI infrastructure has been created
-yet; `terraform/` records the Stage 2 contract.
+(see `docs/stage-1-verification.txt`).
 
 **Stage 2 status — OCI infrastructure authored and validated:** three OpenTofu
 modules (network, compute, persistent block storage) plus a cloud-init mount
 bootstrap. `tofu validate` passes and a read-only `tofu plan` reports 8
 resources to add, 0 to change, 0 to destroy. Nothing has been applied, so there
 is still no running cloud host (see `docs/stage-2-verification.txt`).
+
+**Stage 4 status — local semantic verification complete:** the stack ran with a
+real ONNX embedding model (FastEmbed), the collection was created explicitly
+(384 dims, Cosine, INT8, HNSW m=16), 10/10 chunks were ingested idempotently,
+and retrieval scored **recall@5 1.0 / MRR 1.0** on the labelled query set with
+service-side latency **p50 6.98 ms / p95 8.41 ms**. A RAG prompt with verified
+citations was assembled from the hits. See `docs/stage-4-verification.txt` and
+`docs/stage-4-report.json`.
 
 CloudGuard portability audit: **`PORTABLE_CERTIFIED` — 100/100 (5/5 checks)**,
 audited 2026-11-18. The audit is structural (zero-leak, environment scaffold,
@@ -75,10 +82,13 @@ docker/
   worker/Dockerfile         shared worker/API image
 src/vlake/
   config.py                 environment + YAML settings with validation
-  embeddings.py             hashing and sentence-transformers providers
+  embeddings.py             hashing, fastembed (ONNX) and sentence-transformers providers
+  schema.py                 collection init/inspect CLI (dimensions, distance, HNSW, INT8)
   ingestion.py              JSONL -> chunks -> vectors -> Qdrant
   search.py                 FastAPI retrieval service
   evaluation.py             recall@k / MRR evaluation loop
+scripts/
+  verify_local.py           latency/recall harness + RAG context assembly (stdlib only)
 configs/
   vector_db.yaml            collection shape, HNSW, quantization
   embedding_models.yaml     supported models, dimensions, chunking rationale
@@ -105,10 +115,14 @@ mkdir -p storage/qdrant storage/snapshots
 # 1. start the database
 docker compose --env-file .env -f docker/docker-compose.yml up -d qdrant
 
-# 2. ingest the synthetic corpus (creates the collection on first run)
+# 2. create the collection explicitly (384 dims, Cosine, HNSW, INT8)
+docker compose --env-file .env -f docker/docker-compose.yml run --rm \
+  --entrypoint python ingest-worker -m vlake.schema
+
+# 3. ingest the synthetic corpus
 docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
 
-# 3. serve retrieval
+# 4. serve retrieval
 docker compose --env-file .env -f docker/docker-compose.yml up -d search-api
 ```
 
@@ -149,7 +163,24 @@ curl -s http://127.0.0.1:8085/search \
 docker compose --env-file .env -f docker/docker-compose.yml run --rm \
   --entrypoint python ingest-worker -m vlake.evaluation \
   --dataset configs/datasets/eval_queries.jsonl --k 5
+
+# latency percentiles, recall@k and a RAG prompt from the retrieved chunks
+python scripts/verify_local.py --queries configs/datasets/eval_queries.jsonl \
+  --limit 5 --repeats 3 --output docs/stage-4-report.json
 ```
+
+For semantic numbers, build with the ONNX embedder and select it:
+
+```bash
+VLAKE_EXTRAS=[semantic] docker compose --env-file .env \
+  -f docker/docker-compose.yml build ingest-worker
+# .env: EMBEDDING_PROVIDER=fastembed, EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+```
+
+The model (~87 MB) is cached in the `cloudguard-vector-model-cache` volume, not
+in the repository. Keep `FASTEMBED_THREADS=1` unless the API container has more
+than one CPU: ONNX Runtime oversubscribes a 1-CPU quota and latency jumps to
+100 ms steps.
 
 ---
 
@@ -186,8 +217,9 @@ the worker refuses to start otherwise.
 
 | Provider | Download | Quality | Use |
 | --- | --- | --- | --- |
-| `hashing` | none | lexical only | CI, container smoke tests, pipeline wiring |
-| `sentence-transformers` | model weights | semantic | real retrieval; install the `models` extra |
+| `hashing` | none | lexical only | Offline CI, container smoke tests, pipeline wiring |
+| `fastembed` | ONNX weights (~87 MB) | semantic | CPU retrieval without PyTorch; used for Stage 4 verification |
+| `sentence-transformers` | PyTorch weights | semantic | GPU or large models; install the `models` extra |
 
 ```bash
 pip install '.[models]'
@@ -227,9 +259,11 @@ docker compose --env-file .env -f docker/docker-compose.yml config -q
 | --- | --- |
 | 1 | Scaffold, container topology, ingestion/search/eval code, configs, metadata |
 | 2 | OCI OpenTofu: VCN, NSG, A1.Flex / Standard3.Flex, persistent block volume, cloud-init |
-| 3 | Live deployment and end-to-end verification on OCI with the real corpus |
-| 4 | Scale-out: sharding, snapshot/restore drill, monitoring, capacity test |
-| 5 | Retrieval quality and cost report (recall@k, MRR, latency, memory) |
+| 3 | Agent guide and manual prerequisites |
+| 4 | Local testing: schema init, semantic ingestion, retrieval/latency verification |
+| 5 | Live deployment and end-to-end verification on OCI with the real corpus |
+| 6 | Scale-out: sharding, snapshot/restore drill, monitoring, capacity test |
+| 7 | Retrieval quality and cost report (recall@k, MRR, latency, memory) |
 
 ## Honest limits
 

@@ -19,6 +19,25 @@ providers:
     similarity: cosine
     best_for: Container smoke tests, CI and evaluation-harness wiring.
 
+  fastembed:
+    description: >
+      ONNX sentence embeddings through the optional `semantic` extra. CPU-only,
+      no PyTorch, small image. This is the provider used for semantic retrieval
+      verification on the certification host.
+    requires_download: true
+    similarity: cosine
+    models:
+      - name: BAAI/bge-small-en-v1.5
+        dimension: 384
+        max_sequence_tokens: 512
+        size_mb: 130
+        best_for: Semantic CPU retrieval with a small footprint (default for Stage 4).
+      - name: sentence-transformers/all-MiniLM-L6-v2
+        dimension: 384
+        max_sequence_tokens: 256
+        size_mb: 90
+        best_for: Fast English semantic baseline without PyTorch.
+
   sentence-transformers:
     description: Transformer encoders loaded through the optional `models` extra.
     requires_download: true

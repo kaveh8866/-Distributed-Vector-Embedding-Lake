@@ -160,6 +160,22 @@ class SettingsTests(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE_YAML, "pyyaml is not installed")
+class SchemaTests(unittest.TestCase):
+    def test_collection_spec_matches_config(self) -> None:
+        from vlake.config import CollectionConfig
+        from vlake.schema import collection_spec
+
+        config = CollectionConfig.from_file()
+        spec = collection_spec(config)
+
+        self.assertEqual(spec["name"], config.name)
+        self.assertEqual(spec["vector_size"], config.vector_size)
+        self.assertEqual(spec["distance"], "Cosine")
+        self.assertEqual(spec["hnsw"]["m"], config.hnsw_m)
+        self.assertEqual(spec["quantization"], config.quantization)
+
+
+@unittest.skipUnless(HAVE_YAML, "pyyaml is not installed")
 class CollectionConfigTests(unittest.TestCase):
     def test_vector_db_config_loads(self) -> None:
         from vlake.config import CollectionConfig

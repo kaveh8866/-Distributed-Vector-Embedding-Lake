@@ -5,14 +5,15 @@ terminal agent) picking up this repository. It states what to run, in what
 order, what healthy looks like, and what is verified versus assumed.
 
 > **Read section 13 before making any availability or certification claim.** The
-> stack runs locally today; the OCI certification run is Stage 4 and has not
-> happened yet.
+> stack is verified locally (Stage 4, semantic retrieval); the OCI certification
+> run is Stage 5 and has not happened yet.
 
 ## 1. Current state
 
 | Layer | Status | Evidence |
 | --- | --- | --- |
-| Container topology, worker, API, evaluation | Verified locally | `docs/stage-1-verification.txt` (20 unit tests, live Qdrant, recall@5 0.875) |
+| Container topology, worker, API, evaluation | Verified locally | `docs/stage-1-verification.txt` (live Qdrant, recall@5 0.875 lexical) |
+| Schema init, semantic ingestion, retrieval, latency | Verified locally (Stage 4) | `docs/stage-4-verification.txt`, `docs/stage-4-report.json` (21 unit tests, recall@5 1.0, MRR 1.0, p95 8.41 ms) |
 | OCI infrastructure modules | Authored and validated, **not applied** | `docs/stage-2-verification.txt` (`tofu validate`, plan: 8 to add) |
 | Live OCI deployment | **Pending** | none — do not claim it |
 
@@ -44,7 +45,8 @@ RAG client  → POST /search  → search-api → embed → query_points → hits
 | `docker/qdrant/config.yaml` | Storage paths, listeners, payload-on-disk, telemetry off |
 | `docker/worker/Dockerfile` | Shared worker/API image, uid 10001 |
 | `src/vlake/config.py` | Env + YAML settings, validation |
-| `src/vlake/embeddings.py` | `hashing` and `sentence-transformers` providers |
+| `src/vlake/embeddings.py` | `hashing`, `fastembed` (ONNX) and `sentence-transformers` providers |
+| `src/vlake/schema.py` | Collection init/inspect CLI (`--recreate`, `--inspect`) |
 | `src/vlake/ingestion.py` | Chunking, batching, upsert, CLI |
 | `src/vlake/search.py` | FastAPI `/health` `/ready` `/search` |
 | `src/vlake/evaluation.py` | recall@k / MRR loop |
@@ -53,7 +55,8 @@ RAG client  → POST /search  → search-api → embed → query_points → hits
 | `configs/datasets/` | Synthetic corpus + labelled queries (tracked) |
 | `terraform/` | OCI VCN, A1.Flex instance, block volume, cloud-init (Stage 2) |
 | `MANUAL_PREREQS.md` | Human operator checklist: credentials, storage, models, `.env` |
-| `tests/test_pipeline.py` | 20 dependency-free unit tests |
+| `scripts/verify_local.py` | Latency/recall harness, RAG context assembly (stdlib only) |
+| `tests/test_pipeline.py` | 21 dependency-free unit tests |
 
 ## 4. Agent preflight (run before touching anything)
 
@@ -129,7 +132,7 @@ du -sh storage/qdrant
 ls storage/qdrant/collections
 ```
 
-**OCI host (Stage 4).** The Terraform block volume is mounted at
+**OCI host (Stage 5).** The Terraform block volume is mounted at
 `/mnt/vector-lake`. Use absolute paths in `.env`, or the containers will write
 to the boot disk and the data will not survive instance replacement:
 
@@ -161,8 +164,15 @@ docker compose --env-file .env -f docker/docker-compose.yml run --rm \
 # real ingest
 docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker
 
+# create the collection explicitly (no-op when it already matches)
+docker compose --env-file .env -f docker/docker-compose.yml run --rm \
+  --entrypoint python ingest-worker -m vlake.schema
+
+# inspect without writing anything
+#   ... --entrypoint python ingest-worker -m vlake.schema --inspect
+
 # rebuild the collection from scratch (DESTRUCTIVE: drops all points)
-docker compose --env-file .env -f docker/docker-compose.yml run --rm ingest-worker --recreate
+#   ... --entrypoint python ingest-worker -m vlake.schema --recreate
 ```
 
 Rules:
@@ -204,8 +214,20 @@ Use the working-directory-relative dataset path: Git Bash on Windows rewrites
 `/app/...` into a host path and the container cannot find it.
 
 Score interpretation: with `EMBEDDING_PROVIDER=hashing` the numbers measure
-lexical overlap only. Never present them as semantic RAG quality. Semantic
-numbers require the transformer provider.
+lexical overlap only. Never present them as semantic RAG quality.
+
+Semantic numbers require the ONNX or transformer provider:
+
+```bash
+VLAKE_EXTRAS=[semantic] docker compose --env-file .env \
+  -f docker/docker-compose.yml build ingest-worker
+# .env: EMBEDDING_PROVIDER=fastembed
+```
+
+`scripts/verify_local.py` adds service-side and end-to-end latency percentiles,
+per-query recall and a grounded RAG prompt. Keep `FASTEMBED_THREADS=1` on a
+1-CPU API container; more ONNX threads than the CPU quota causes cgroup
+throttling and 100 ms latency steps.
 
 ## 9. Monitoring: index health, memory, disk, logs
 
@@ -307,12 +329,12 @@ using trial credits with high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex
 supported ports, not certified targets: no AWS or GCP certification run is made
 or implied.
 
-**Status.** The OCI certification run is Stage 4. Today the infrastructure is
+**Status.** The OCI certification run is Stage 5. Today the infrastructure is
 validated (`tofu validate`; plan: 8 to add, 0 to change) but **not applied**, and
-the local container run is the only executed verification. Until Stage 4
-records cloud-init, mount, healthy services and live ingest/search evidence, do
-not describe the project as deployed, certified on OCI, benchmarked, or
-production-ready.
+the local container run (Stage 4, semantic ONNX retrieval) is the only executed
+verification. Until Stage 5 records cloud-init, mount, healthy services and live
+ingest/search evidence, do not describe the project as deployed, certified on
+OCI, benchmarked, or production-ready.
 
 ## 14. Stage roadmap
 
@@ -320,16 +342,17 @@ production-ready.
 | --- | --- | --- |
 | 1 | Scaffold, compose, worker/API/eval, configs | unit tests, compose config, local pipeline run — **done** |
 | 2 | OCI network, compute, block volume, cloud-init | `fmt`, `validate`, read-only plan — **done** |
-| 3 | Agent guide and manual prerequisites | docs complete, links valid, committed — **this stage** |
-| 4 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search |
-| 5 | Scale and recovery | snapshot/restore drill, load test, monitoring |
-| 6 | Quality and cost report | recall@k / MRR / latency / memory at target scale |
+| 3 | Agent guide and manual prerequisites | docs complete, links valid, committed — **done** |
+| 4 | Local testing: schema, semantic ingest, retrieval, latency | recall@k / latency recorded, no OOM — **done** (`docs/stage-4-verification.txt`) |
+| 5 | Live OCI deployment | cloud-init done, volume mounted, healthy services, live ingest/search |
+| 6 | Scale and recovery | snapshot/restore drill, load test, monitoring |
+| 7 | Quality and cost report | recall@k / MRR / latency / memory at target scale |
 
 ## 15. Handoff checklist
 
 ```bash
 git status --porcelain                  # clean
-python -m unittest discover -s tests -q # 20 tests
+python -m unittest discover -s tests -q # 21 tests
 docker compose --env-file .env -f docker/docker-compose.yml config -q
 cd terraform && tofu fmt -recursive -check && tofu validate && cd ..
 git check-ignore -v .env terraform/terraform.tfvars

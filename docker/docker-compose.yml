@@ -43,6 +43,11 @@ x-vector-env: &vector-env
   DISTANCE: ${DISTANCE:-Cosine}
   EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-hashing}
   EMBEDDING_MODEL: ${EMBEDDING_MODEL:-sentence-transformers/all-MiniLM-L6-v2}
+  FASTEMBED_CACHE_PATH: /cache/fastembed
+  # One ONNX thread per allocated CPU; oversubscription causes cgroup
+  # throttling and 100 ms latency steps.
+  FASTEMBED_THREADS: ${FASTEMBED_THREADS:-1}
+  OMP_NUM_THREADS: "1"
   EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-384}
   CHUNK_SIZE: ${CHUNK_SIZE:-800}
   CHUNK_OVERLAP: ${CHUNK_OVERLAP:-120}
@@ -108,6 +113,9 @@ services:
     build:
       context: ..
       dockerfile: docker/worker/Dockerfile
+      # VLAKE_EXTRAS=[semantic] installs the ONNX embedder in the image.
+      args:
+        VLAKE_EXTRAS: ${VLAKE_EXTRAS:-base}
     image: cloudguard/vector-lake:local
     container_name: cg-vector-ingest
     restart: "no"
@@ -123,6 +131,8 @@ services:
     volumes:
       - ../configs:/app/configs:ro
       - ../configs/datasets:/data:ro
+      # Model weights survive image rebuilds and stay out of the rootfs.
+      - model-cache:/cache
 
     depends_on:
       qdrant:
@@ -148,6 +158,8 @@ services:
     build:
       context: ..
       dockerfile: docker/worker/Dockerfile
+      args:
+        VLAKE_EXTRAS: ${VLAKE_EXTRAS:-base}
     image: cloudguard/vector-lake:local
     container_name: cg-vector-api
     restart: unless-stopped
@@ -167,6 +179,7 @@ services:
 
     volumes:
       - ../configs:/app/configs:ro
+      - model-cache:/cache
 
     ports:
       - "127.0.0.1:${API_PORT:-8085}:8080"
@@ -206,3 +219,9 @@ networks:
   default:
     name: cloudguard-vector-net
     driver: bridge
+
+volumes:
+  # Shared embedding-model cache (FastEmbed ONNX / Hugging Face weights).
+  # Gitignored by construction: a named volume, never a repository path.
+  model-cache:
+    name: cloudguard-vector-model-cache

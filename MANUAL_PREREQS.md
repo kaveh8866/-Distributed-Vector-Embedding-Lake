@@ -5,8 +5,9 @@ every section in order; each ends with a verification command. If a check fails,
 stop and fix it — do not let an agent improvise around a missing prerequisite.
 
 > **Status.** No OCI resource exists yet. The infrastructure is validated
-> (`tofu validate`, plan: 8 to add) and the container stack is verified locally.
-> The live run is Stage 4 and needs the items below.
+> (`tofu validate`, plan: 8 to add) and the container stack is verified locally,
+> including semantic retrieval (`docs/stage-4-verification.txt`). The live run
+> is Stage 5 and needs the items below.
 
 ## Cloud portability and certification scope
 
@@ -21,7 +22,7 @@ high-RAM **Ampere ARM** instances (`VM.Standard.A1.Flex`, 4 OCPU / 24 GB) and
 persistent **OCI Block Volume** storage. AWS and GCP are supported ports, not
 certified targets; no AWS or GCP certification run is claimed.
 
-This checklist prepares that OCI run. Until Stage 4 records its evidence, the
+This checklist prepares that OCI run. Until Stage 5 records its evidence, the
 project is not deployed and not certified on OCI.
 
 ---
@@ -229,7 +230,7 @@ The IaC creates and attaches the volume; cloud-init formats it **only if it has
 no filesystem**, mounts it by ext4 label `vectorlake`, adds an `nofail` fstab
 entry and creates the data layout.
 
-Expected on the host after Stage 4 apply:
+Expected on the host after the Stage 5 apply:
 
 ```bash
 df -h /mnt/vector-lake
@@ -241,7 +242,7 @@ ls -la /mnt/vector-lake/storage
 - [ ] `/mnt/vector-lake` is mounted with label `vectorlake`.
 - [ ] `storage/qdrant` and `storage/snapshots` exist and are owned by uid 1000.
 - [ ] The mount unit is `active (exited)`.
-- [ ] A reboot keeps the mount (fstab `nofail`) — verify during Stage 4.
+- [ ] A reboot keeps the mount (fstab `nofail`) — verify during Stage 5.
 
 **Data safety:** `tofu destroy` deletes the volume. Before any real corpus lands,
 set `lifecycle { prevent_destroy = true }` on `oci_core_volume.vector` (documented
@@ -256,10 +257,26 @@ Pick one provider before starting; the collection dimension must match it.
 | Option | Key/weights | Dimension | Use |
 | --- | --- | --- | --- |
 | `hashing` (default) | none | 384 | Offline verification, CI. Lexical only. |
-| `sentence-transformers` | model weights (~90 MB–2.2 GB) | model-specific | Real semantic retrieval |
+| `fastembed` | ONNX weights (~87 MB) | 384 (MiniLM) | Semantic retrieval on CPU, no PyTorch. Used in Stage 4. |
+| `sentence-transformers` | model weights (~90 MB–2.2 GB) | model-specific | Semantic retrieval with PyTorch (GPU / large models) |
 | Hosted embedding API | provider API key | provider-specific | Not integrated in this repository |
 
-**Local weights (recommended for certification):**
+**ONNX weights (recommended for certification, CPU only):**
+
+The image ships base dependencies. Install the provider at build time:
+
+```bash
+cd vector-lake
+VLAKE_EXTRAS=[semantic] docker compose --env-file .env \
+  -f docker/docker-compose.yml build ingest-worker
+```
+
+The first ingest downloads `BAAI/bge-small-en-v1.5` or the configured MiniLM
+ONNX build into `/cache/fastembed`, a named volume
+(`cloudguard-vector-model-cache`), so weights survive image rebuilds and never
+enter the repository. `FASTEMBED_CACHE_PATH` is set by the image.
+
+**PyTorch weights (GPU or large models):**
 
 ```bash
 # on the host or workstation, outside the repo
@@ -269,14 +286,17 @@ SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')"
 ```
 
 - [ ] The model downloads once and is cached (`HF_HOME`, default
-  `~/.cache/huggingface`).
+  `~/.cache/huggingface`; FastEmbed uses the `/cache/fastembed` volume).
 - [ ] `EMBEDDING_MODEL` points at the cached model id, and
   `EMBEDDING_DIMENSION` / `VECTOR_SIZE` match it (MiniLM = 384, bge-m3 = 1024).
 - [ ] For an air-gapped host, pre-download the weights, mount the cache into the
   container and set `HF_HUB_OFFLINE=1`.
-- [ ] The current image installs base dependencies only; a transformer run needs
-  the `models` extra added to the worker image (a one-line Dockerfile change) or
-  a host-side virtual environment. Do not assume the container has it.
+- [ ] The base image installs no model runtime; build with
+  `VLAKE_EXTRAS=[semantic]` (ONNX, CPU) or `[models]` (PyTorch). Do not assume
+  the container has one.
+- [ ] `FASTEMBED_THREADS` stays 1 unless the API container has more than one
+  CPU. More ONNX threads than the CPU quota causes cgroup throttling and 100 ms
+  latency steps (measured in Stage 4).
 
 **Hosted API keys:** this repository has no hosted-embedding client. If you add
 one, keep the key server-side in `.env`, never in `configs/`, a browser bundle or
@@ -325,7 +345,7 @@ instead of running an unauthenticated database.
 ```bash
 # repository
 git status --porcelain                       # empty
-python -m unittest discover -s tests -q      # 20 tests pass
+python -m unittest discover -s tests -q      # 21 tests pass
 
 # container topology
 docker compose --env-file .env -f docker/docker-compose.yml config -q
@@ -350,14 +370,14 @@ free -h
 
 ---
 
-## 12. Deployment sequence (Stage 4, operator-approved)
+## 12. Deployment sequence (Stage 5, operator-approved)
 
 Do not run this without an explicit go-ahead. It creates cloud resources.
 
 ```bash
 cd terraform
-tofu plan -out=stage4.tfplan        # review: 8 to add
-tofu apply stage4.tfplan            # approved action
+tofu plan -out=stage5.tfplan        # review: 8 to add
+tofu apply stage5.tfplan            # approved action
 
 tofu output instance_public_ip
 ssh ubuntu@<public-ip>
@@ -381,7 +401,7 @@ curl -s http://127.0.0.1:8085/ready
 
 ---
 
-## 13. Acceptance criteria for Stage 4
+## 13. Acceptance criteria for Stage 5
 
 | Criterion | Evidence |
 | --- | --- |
@@ -391,7 +411,7 @@ curl -s http://127.0.0.1:8085/ready
 | Container health | `qdrant` and `search-api` healthy |
 | Ingestion | JSON summary with point count |
 | Retrieval | `POST /search` 200 with hits |
-| Evaluation | recall@k / MRR recorded in `docs/stage-4-verification.txt` |
+| Evaluation | recall@k / MRR recorded in `docs/stage-5-verification.txt` |
 | Boundary | no key, state, tfvars or corpus tracked |
 
 ---
@@ -444,5 +464,5 @@ Report the blocker instead of improvising when:
 The certified target is OCI only, with Ampere ARM compute and a persistent block
 volume, funded by the trial credit allocation. Re-running this checklist on AWS
 or GCP produces a supported port, not a certified one. Certification evidence is
-recorded in `docs/stage-4-verification.txt` once the live run happens; before
+recorded in `docs/stage-5-verification.txt` once the live run happens; before
 that, no deployment or certification claim is valid.

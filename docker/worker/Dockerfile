@@ -11,8 +11,11 @@
 #
 # The runtime user is unprivileged (uid/gid 10001), the rootfs is read-only in
 # Compose, and no model weights are baked in: the default embedder is the
-# offline deterministic hashing provider, and model-backed providers cache into
-# the mounted config volume or an operator-provided cache.
+# offline deterministic hashing provider. Semantic providers install through a
+# build arg and cache their weights in the mounted /cache volume:
+#
+#   docker build -f docker/worker/Dockerfile \
+#     --build-arg VLAKE_EXTRAS=[semantic] -t cloudguard/vector-lake:local .
 
 FROM python:3.12-slim
 
@@ -38,7 +41,19 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 COPY configs ./configs
 
-RUN pip install --no-cache-dir . \
+# Optional dependency groups (for example [semantic] for ONNX embeddings).
+# "base" means no extras: the image stays small and offline-friendly.
+ARG VLAKE_EXTRAS="base"
+
+ENV FASTEMBED_CACHE_PATH=/cache/fastembed \
+    HF_HOME=/cache/huggingface
+
+# /cache is a named volume in Compose; creating it here fixes its ownership so
+# the unprivileged user can write model weights into it.
+RUN mkdir -p /cache/fastembed /cache/huggingface \
+ && chown -R 10001:10001 /cache \
+ && if [ "$VLAKE_EXTRAS" = "base" ]; then spec="."; else spec=".${VLAKE_EXTRAS}"; fi \
+ && pip install --no-cache-dir "$spec" \
  && rm -rf /root/.cache /tmp/*
 
 USER 10001:10001

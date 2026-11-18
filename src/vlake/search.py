@@ -16,8 +16,9 @@ from __future__ import annotations
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
 from functools import lru_cache
-from typing import Any
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
@@ -29,10 +30,35 @@ from .embeddings import Embedder, build_embedder
 
 LOGGER = logging.getLogger("vlake.search")
 
+# The container starts uvicorn directly, so no CLI code configures logging for
+# this module. Without a root handler the warm-up and query INFO records are
+# dropped and the container looks silent.
+logging.basicConfig(
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    """Warm the embedding model so the first query is not a cold start.
+
+    Loading an ONNX model on the first request adds hundreds of milliseconds to
+    that request. Failure is logged, not fatal: readiness reports the real
+    state and the API stays up for operators to inspect.
+    """
+    try:
+        embedder().embed_query("warm-up")
+        LOGGER.info("embedding model warmed up")
+    except Exception as error:  # noqa: BLE001 - warm-up must not kill the service
+        LOGGER.warning("embedding warm-up failed: %s", error)
+    yield
+
+
 app = FastAPI(
     title="Distributed Vector & Embedding Lake",
     version=__version__,
     description="Qdrant-backed retrieval API for RAG pipelines.",
+    lifespan=lifespan,
 )
 
 

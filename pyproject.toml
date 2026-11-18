@@ -22,11 +22,15 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# ONNX semantic embeddings: CPU-only, no PyTorch, ~130 MB model download.
+semantic = ["fastembed>=0.4,<1"]
+# PyTorch encoders for GPU or very large models.
 models = ["sentence-transformers>=3.2,<4"]
 dev = ["pytest>=8.3,<9", "ruff>=0.7,<1"]
 
 [project.scripts]
 vlake-ingest = "vlake.ingestion:main"
+vlake-schema = "vlake.schema:main"
 vlake-search = "vlake.search:main"
 vlake-eval = "vlake.evaluation:main"
 

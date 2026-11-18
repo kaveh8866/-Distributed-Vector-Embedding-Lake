@@ -1,0 +1,185 @@
+Project — Distributed Vector & Embedding Lake
+Stage 4 — local testing and verification
+Date: 2026-11-18
+Host: Windows workstation, Docker Desktop (linux/amd64 containers)
+Scope: run the full stack locally with a real semantic embedding model, create
+the collection explicitly, ingest the sample corpus, measure retrieval quality,
+latency and memory, and assemble a RAG prompt from retrieved chunks.
+No cloud resource exists; OCI deployment is Stage 5.
+
+Tooling
+-------
+Docker             29.8.1
+Docker Compose     5.5.1
+Qdrant server      qdrant/qdrant:v1.12.4
+qdrant-client      1.12.2
+FastEmbed          0.9.1 (ONNX Runtime 1.32.0, CPU)
+Model              sentence-transformers/all-MiniLM-L6-v2 (ONNX build, 384 dims)
+Container image    cloudguard/vector-lake:local, built with VLAKE_EXTRAS=[semantic]
+
+1. Stack startup (detached)
+---------------------------
+docker compose --env-file .env -f docker/docker-compose.yml up -d qdrant
+  container cg-vector-qdrant: healthy after 2 probes
+  listener: 127.0.0.1:6333 (REST), gRPC 6334 inside the bridge network
+  Qdrant log: "Distributed mode disabled", "Telemetry reporting disabled"
+
+docker compose ... up -d search-api
+  container cg-vector-api: healthy
+  listener: 127.0.0.1:8085 -> 8080/tcp
+  (8085 is used because 8080 is the CloudGuard orchestrator dev server)
+
+docker ps
+  cg-vector-qdrant | Up (healthy) | 127.0.0.1:6333->6333/tcp
+  cg-vector-api    | Up (healthy) | 127.0.0.1:8085->8080/tcp
+
+2. Schema initialization
+------------------------
+The collection is now created by an explicit step, not as a side effect of
+ingestion:
+
+  docker compose ... run --rm --entrypoint python ingest-worker \
+    -m vlake.schema --recreate
+
+  collection        rag_documents
+  created           true
+  status            green
+  vector_size       384
+  distance          Cosine
+  quantization      INT8 (scalar, quantile 0.99, always_ram)
+  hnsw              m=16, ef_construct=128, full_scan_threshold_kb=10000
+  shard_number      1, replication_factor 1
+  on_disk_payload   true
+  segments_count    2
+  optimizer_status  ok
+  points_count      0
+
+python -m vlake.schema --inspect is the read-only equivalent and fails clearly
+when the collection is absent.
+
+3. Semantic ingestion
+---------------------
+Provider: fastembed (ONNX, CPU). The first run fetched 5 model files (~87 MB)
+into the named volume cloudguard-vector-model-cache.
+
+  docker compose ... run --rm ingest-worker
+  documents            10
+  chunks               10
+  average_chunk_chars  449.8
+  embedder             fastembed:sentence-transformers/all-MiniLM-L6-v2
+  vector_dimension     384
+  points_written       10
+  collection_points    10
+  exit                 0
+
+Idempotency: an immediate second run reported points_written 10 and
+collection_points 10 with collection_created false — deterministic UUIDv5 point
+IDs overwrote the same points instead of appending duplicates.
+
+Memory around ingestion (docker stats):
+  qdrant before 154.8 MiB, after 156.0 MiB (8 GiB limit)
+  API after warm-up 215.1 MiB (2 GiB limit)
+  OOMKilled=false, RestartCount=0 for both containers
+The worker is a one-shot process that exits after the batch; a leak test across
+long-lived worker uptime is therefore not applicable. Qdrant, the long-lived
+service, showed no growth across repeated ingestion.
+
+4. Retrieval quality
+--------------------
+Labelled set: 8 queries, 10-document synthetic corpus, k=5.
+
+vlake.evaluation
+  cases         8
+  recall_at_k   1.0
+  mrr           1.0
+
+Compare with Stage 1's lexical hashing provider on the same corpus and queries:
+recall@5 0.875, MRR 0.6458. The semantic model ranks the correct document first
+for every query, including paraphrases ("how large should RAG chunks be and how
+much overlap", "Ampere A1 memory split between database and workers") that the
+lexical provider could not rank first.
+
+scripts/verify_local.py (24 requests, 3 repeats per query)
+  requests   24
+  failures   0
+  recall@5   1.0
+
+5. Latency
+----------
+Service-side latency is measured inside the API (embed + Qdrant query) and
+reported by the response's latency_ms. End-to-end adds the Windows host port
+proxy.
+
+  service   p50 6.98 ms | p95 8.41 ms | max 10.37 ms | mean 7.22 ms
+  end-to-end p50 11.17 ms | p95 31.24 ms | max 32.71 ms | mean 15.31 ms
+
+First measured run, before two fixes, for comparison:
+  wall-clock p50 298.82 ms, p95 699.31 ms, max 903.84 ms
+  direct requests: 380 / 59 / 547 / 255 / 155 ms
+  in-container embedding alone: 3.5-3.9 ms per query
+
+Diagnosis: ONNX Runtime defaulted to one thread per host core and spun between
+tasks. Inside a 1-CPU container that oversubscribes the cgroup quota, so the
+kernel throttled requests into ~100 ms steps (observed 100/200/300/500 ms).
+Fix: FastEmbedEmbedder passes threads (FASTEMBED_THREADS, default 1) and compose
+sets OMP_NUM_THREADS=1. Service p50 fell from ~299 ms to ~7 ms on the same
+corpus and hardware.
+
+A second spike (max 183 ms) remained on the first request after a restart: the
+ONNX model loaded lazily inside that request. The API now warms the embedder in
+its lifespan hook; log line "embedding model warmed up" appears before
+"Application startup complete", and max latency fell to 10.37 ms.
+
+Thresholds used for this stage (local baseline, not a cloud claim):
+  service p95 < 100 ms  -> met (8.41 ms)
+  error rate 0         -> met (24/24, 0 failures)
+  recall@5 = 1.0       -> met
+
+6. RAG retrieval assembly
+-------------------------
+verify_local.py builds the retrieval half of a RAG request: retrieved chunks are
+formatted with citation ids, a context budget (max 2400 chars) and a grounded
+prompt that forbids answers outside the context.
+
+  citations        doc-vector-quantization::0000, doc-embedding-dimensions::0000,
+                   doc-oci-flex-shapes::0000, doc-qdrant-architecture::0000
+  context_chars    2097
+  prompt_chars     2322
+
+Every citation id is a chunk_id returned by the search response, so an answer
+can be traced to a stored chunk. No generation model is called in this stage.
+
+7. Defects found and fixed
+--------------------------
+- ONNX thread oversubscription inside a CPU-limited container caused 100 ms
+  latency steps. Fixed with FASTEMBED_THREADS/OMP_NUM_THREADS and verified by
+  measurement (above).
+- Cold-start model load inflated the first request (183 ms max). Fixed with a
+  lifespan warm-up.
+- The API configured no logging handler, so warm-up and query INFO records were
+  silently dropped. Fixed by configuring the root logger from LOG_LEVEL;
+  "embedding model warmed up" and per-query records now appear in docker logs.
+- The benchmark initially reported only host wall clock, which mixes Windows
+  port-proxy overhead into vector-search latency. It now reports service-side
+  and end-to-end percentiles separately.
+
+8. Not verified in Stage 4
+--------------------------
+- No OCI resource: no cloud capacity, cloud-init, block-volume mount or A1
+  performance claim. Live deployment is Stage 5.
+- Corpus is 10 synthetic documents / 10 chunks. Recall@5 1.0 at this size is a
+  pipeline check, not evidence of quality at 10^5-10^7 chunks.
+- No concurrency or sustained-load test; 24 sequential requests are a latency
+  baseline, not a throughput benchmark.
+- Memory footprint at corpus scale is untested (169.7 MiB is an empty-ish index).
+- Snapshot/restore is not drilled.
+- onnxruntime logs "Failed to persist telemetry device ID" because the rootfs is
+  read-only. It is harmless (telemetry was never enabled); no functional impact
+  was observed.
+
+9. Teardown
+-----------
+The stack was stopped with `docker compose ... down` after the evidence above
+was captured. Host-side storage/ and the named model cache were retained;
+containers and the bridge network were removed. No listener remains on 6333,
+6334 or 8085.
