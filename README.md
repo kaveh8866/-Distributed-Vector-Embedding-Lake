@@ -29,6 +29,7 @@ OpenTofu.
 | Local semantic retrieval: recall@5 1.0 / MRR 1.0, p95 8.41 ms | `docs/stage-4-verification.txt` |
 | Live on OCI: A2.Flex 4 OCPU / 24 GB, 200 GB block volume, 10 points, recall@5 1.0, p95 11.35 ms | `docs/stage-5-verification.txt` |
 | Zero-leak and Git-boundary audit: `PORTABLE_CERTIFIED` 100/100 (5/5) | `docs/stage-7-security-audit.txt` |
+| Host retired: 8 OCI resources destroyed, 0 live in the tenancy, EUR 0.00 billed | `docs/stage-9-teardown.txt` |
 | Corpus size and load limits are stated, not implied | [Honest limits](#-honest-limits) |
 
 ---
@@ -402,6 +403,7 @@ docs/                       per-stage verification evidence and reports
 | 6 | Scale-out: sharding, snapshot/restore drill, monitoring, load test | Partial — snapshot/restore drill done, `docs/stage-6-verification.txt`; sharding, monitoring and load test pending |
 | 7 | Security audit, documentation, cost estimation | Done — `docs/stage-7-security-audit.txt`, this README |
 | 8 | Release packaging: license, clean tree, `v1.0.0` tag, public repository | Done — tag `v1.0.0` |
+| 9 | Zero-cost teardown: destroy the stack, audit the tenancy, confirm spend | Done — `docs/stage-9-teardown.txt` |
 
 ## ⚠️ Honest limits
 
@@ -432,6 +434,7 @@ docs/                       per-stage verification evidence and reports
 | [`AGENT_GUIDE.md`](AGENT_GUIDE.md) | Agent operating contract: bring-up, ingestion, query, monitoring, failure modes |
 | [`docs/stage-5-verification.txt`](docs/stage-5-verification.txt) | Live OCI evidence: IDs, mount, metrics, defects fixed |
 | [`docs/stage-7-security-audit.txt`](docs/stage-7-security-audit.txt) | Zero-leak audit commands and sign-off |
+| [`docs/stage-9-teardown.txt`](docs/stage-9-teardown.txt) | Teardown record: 8 resources destroyed, zero-resource tenancy audit, EUR 0.00 spend |
 | [`terraform/README.md`](terraform/README.md) | Module contract, variables, capacity notes |
 
 ## License

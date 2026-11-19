@@ -1,0 +1,354 @@
+================================================================================
+Project — Distributed Vector & Embedding Lake
+Stage 9 — Zero-Cost Teardown & Resource Audit
+Teardown record and tenancy sign-off
+Date: 2026-11-18
+Operator: agent, on the operator's workstation (OpenTofu 1.13.9, Git Bash)
+Region: eu-frankfurt-1, tenancy root compartment
+Scope: this project's OpenTofu stack, the shared OCI tenancy (read-only audit),
+       and this project's documentation record
+Raw evidence (gitignored, under runtime/):
+  zero-cost-destroy-plan.txt, zero-cost-destroy.tfplan, zero-cost-destroy-apply.log
+  ../10-multi-agent-local-llm-swarm/runtime/zero-cost-audit/  (read-only audit)
+================================================================================
+
+NOTE ON THE STAGE NUMBER
+------------------------
+Stage 6 in this project is the snapshot/restore drill
+(`docs/stage-6-verification.txt`), not a teardown. Project 10 used Stage 6 for its
+teardown. The teardown of this stack therefore takes the next free number, 9,
+after the Stage 8 release. The content mirrors Project 10's Stage 6 record
+(RESULT, numbered evidence sections, explicit limits, SIGN-OFF); only the number
+differs, because this project's Stage 6 was already spent on the drill.
+
+RESULT
+------
+All eight OpenTofu-managed OCI resources were destroyed in one apply. A read-only,
+tenancy-wide provider audit run afterwards reports zero live project-owned
+resources in any category, and the OCI Usage API reports EUR 0.00 of billed spend
+for the whole tenancy over the audit window.
+
+  destroy         Plan: 0 to add, 0 to change, 8 to destroy
+                  Apply complete! Resources: 0 added, 0 changed, 8 destroyed.
+  state           terraform.tfstate serial 13, 0 resources, 0 outputs
+  live_total      0 across 2 compartments and 15 audited categories
+  spend           COST EUR 0.00 (Usage API), wallet spent_credit 0
+
+The host is gone: `92.5.95.252:22` times out. That is corroboration, not the
+proof — the proof is the empty state plus the provider audit in §6.
+
+--------------------------------------------------------------------------------
+1. STARTING POINT
+--------------------------------------------------------------------------------
+The stack had been live since Stage 5 and untouched by Stage 6/7/8, which added
+snapshot drill evidence, an audit and a release tag but changed no cloud
+resource. OpenTofu state before the teardown held 12 entries: 8 managed resources
+and 4 data sources.
+
+  $ tofu state list                          (before)
+  module.compute.data.oci_core_images.ubuntu[0]
+  module.compute.data.oci_core_vnic.primary
+  module.compute.data.oci_core_vnic_attachments.this
+  module.compute.data.oci_identity_availability_domains.ads
+  module.compute.oci_core_instance.this
+  module.network.oci_core_internet_gateway.this
+  module.network.oci_core_route_table.public
+  module.network.oci_core_security_list.public
+  module.network.oci_core_subnet.public
+  module.network.oci_core_vcn.this
+  module.storage.oci_core_volume.vector
+  module.storage.oci_core_volume_attachment.vector
+
+  terraform.tfstate        50,819 bytes  serial 11  resources 8  outputs 19
+  outputs still resolving  instance_public_ip 92.5.95.252, instance_shape
+                           "VM.Standard.A2.Flex (4 OCPU / 24 GB)",
+                           block_volume_size_gbs 200, vector_endpoints
+                           qdrant_http http://92.5.95.252:6333
+
+The pre-teardown live inventory listed the instance RUNNING, the 200 GB volume
+ATTACHED to it at /mnt/vector-lake, and the collection serving `rag_documents`
+(10 points, health/ready green) as Stage 5 and Stage 6 recorded. The destroy
+therefore started from a working deployment, not from a broken host that would
+have made a clean teardown meaningless.
+
+--------------------------------------------------------------------------------
+2. THE EIGHT DESTROYED RESOURCES
+--------------------------------------------------------------------------------
+  #  Address                                          Name / shape
+  1  module.storage.oci_core_volume_attachment.vector  attachment of the data volume
+  2  module.storage.oci_core_volume.vector             vector-lake-dev-vector-data,
+                                                       200 GB, 10 VPUs/GB (Balanced),
+                                                       /mnt/vector-lake
+  3  module.compute.oci_core_instance.this             vector-lake-dev-vm,
+                                                       VM.Standard.A2.Flex
+                                                       4 OCPU / 24 GB,
+                                                       public 92.5.95.252,
+                                                       private 10.9.1.125
+  4  module.network.oci_core_subnet.public             vector-lake-dev-public-subnet,
+                                                       10.9.1.0/24, ingress 22/6333/6334
+                                                       from the operator /32 only
+  5  module.network.oci_core_security_list.public      same four ports, operator /32
+  6  module.network.oci_core_route_table.public        0.0.0.0/0 -> internet gateway
+  7  module.network.oci_core_internet_gateway.this     VCN egress path
+  8  module.network.oci_core_vcn.this                  vector-lake-dev-vcn, 10.9.0.0/16
+
+The boot volume is not in that list as a separate address: this stack never
+managed one. OCI created it with the instance and deletes it with the instance,
+so it is destroyed by the instance destruction (the audit in §6 shows it in
+TERMINATED, not live). Resource OCIDs are deliberately not repeated here;
+`docs/stage-5-verification.txt` and the gitignored runtime logs carry them.
+
+Everything in the list was this project's own. Nothing else in the tenancy was
+in the plan — no other project's instance, volume or network was touched, which
+§6 re-verifies independently.
+
+--------------------------------------------------------------------------------
+3. DESTRUCTIVE-ACTION GATE
+--------------------------------------------------------------------------------
+Teardown is irreversible: it deletes the instance, its boot volume and the 200 GB
+data volume that held the Qdrant collection, WAL, payloads and the Stage 6
+snapshot. Order was plan → review → apply → empty state → provider check:
+
+  $ tofu plan -destroy -out=../runtime/zero-cost-destroy.tfplan
+  Plan: 0 to add, 0 to change, 8 to destroy.
+
+No `prevent_destroy` lifecycle guard exists in `modules/storage` or
+`modules/compute` for this deployment, so the data volume was eligible — the same
+position Project 10's Stage 6 recorded, and the correct one for a requested
+zero-cost teardown. The operator's teardown request is the approval for this
+destructive action; it was scoped to this project's stack, and the reviewed plan
+named exactly those 8 addresses and nothing else.
+
+--------------------------------------------------------------------------------
+4. OPENTOFU DESTROY
+--------------------------------------------------------------------------------
+  $ tofu apply ../runtime/zero-cost-destroy.tfplan
+
+  module.storage.oci_core_volume_attachment.vector  Destruction complete after 23s
+  module.storage.oci_core_volume.vector             Destruction complete after  3s
+  module.compute.oci_core_instance.this             Destruction complete after 1m4s
+  module.network.oci_core_subnet.public             Destruction complete after  1s
+  module.network.oci_core_route_table.public        Destruction complete after  0s
+  module.network.oci_core_security_list.public      Destruction complete after  0s
+  module.network.oci_core_internet_gateway.this     Destruction complete after  0s
+  module.network.oci_core_vcn.this                  Destruction complete after  1s
+
+  Apply complete! Resources: 0 added, 0 changed, 8 destroyed.
+
+Dependency order came from the graph, not from hand sequencing: attachment →
+volume → instance, then subnet, route table, security list, gateway, VCN. The
+attachment took 23 s because OCI detaches asynchronously; the instance took 1m 4s
+because OCI terminates asynchronously. The network teardown was sub-second once
+the instance was gone.
+
+--------------------------------------------------------------------------------
+5. POST-DESTROY STATE
+--------------------------------------------------------------------------------
+  $ tofu state list
+  (no output, exit 0)
+
+  $ tofu output
+  Warning: No outputs found
+
+  terraform.tfstate        3,048 bytes  serial 13  resources 0  outputs 0
+  terraform.tfstate.backup 50,819 bytes (pre-destroy serial 11, kept as evidence)
+
+The empty state is retained locally (gitignored) so a future `plan` starts from a
+real empty baseline rather than a missing file. It was not deleted.
+
+--------------------------------------------------------------------------------
+6. ZERO-RESOURCE AUDIT — TENANCY WIDE
+--------------------------------------------------------------------------------
+No OCI CLI is installed on this workstation, so the check is a read-only
+OpenTofu configuration using the same provider, profile, region and compartment
+as the deployment
+(`projects/10-multi-agent-local-llm-swarm/runtime/zero-cost-audit/`, gitignored).
+It declares data sources only and creates nothing:
+
+  $ tofu apply -auto-approve -var-file=values.tfvars
+  Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+
+  compartments_scanned = { total = 2 }   (tenancy root + project compartment)
+
+Live project-owned resources, by category — all empty:
+
+  live_total = 0
+  live_instances = []            live_block_volumes = []
+  live_boot_volumes = []         live_volume_attachments = []
+  live_vcns = []                 live_subnets = []
+  live_security_lists = []       live_route_tables = []
+  live_internet_gateways = []    live_nat_gateways = []
+  live_network_security_groups = []
+  live_load_balancers = []       live_file_systems = []
+  live_autonomous_databases = []
+
+Raw listing totals and terminal states, which is what the API also shows:
+
+  raw_totals = { instances 3, volumes 2, boot_volumes 3, volume_attachments 2,
+                 buckets 1, vcns 0, subnets 0, security_lists 0, route_tables 0,
+                 internet_gateways 0, nsgs 0, lbs 0, file_systems 0, adbs 0 }
+
+  terminated_history = {
+    instances  ["cloudguard-bastion-dev-vm (TERMINATED)",
+                "llm-swarm-dev-vm (TERMINATED)",
+                "vector-lake-dev-vm (TERMINATED)"]
+    volumes    ["vector-lake-dev-vector-data (TERMINATED)",
+                "llm-swarm-dev-llm-data (TERMINATED)"]
+    boot_vols  ["cloudguard-bastion-dev-vm (Boot Volume) (TERMINATED)",
+                "vector-lake-dev-vm (Boot Volume) (TERMINATED)",
+                "llm-swarm-dev-vm (Boot Volume) (TERMINATED)"]
+  }
+
+Terminated and detached records still appear in API listings for a while. They
+are historical entries, not live resources: the instance OCID reports TERMINATED,
+the attachment reports DETACHED, and no listing carries a RUNNING/ATTACHED state.
+
+One bucket remains: `cloudguard` in namespace `frvl2gdp5ik1`, with 0 objects and
+0 bytes. It is operator-owned and predates this project; it is not this stack's
+resource and deletion was not requested, so it was left in place. An empty bucket
+in the Always Free 20 GB allowance bills nothing.
+
+Scope note. This audit is tenancy-wide, so it also proves the negative: the
+compartment holds no live instance, volume, boot volume, attachment, VCN, subnet,
+security list, route table, internet gateway, NAT gateway, NSG, load balancer,
+file system or autonomous database at all — not merely none belonging to this
+project. Project 08's and Project 10's stacks had already been torn down to zero
+before this run.
+
+--------------------------------------------------------------------------------
+7. ENDPOINT CHECK
+--------------------------------------------------------------------------------
+  $ curl -m 15 telnet://92.5.95.252:22
+  curl: (28) Connection timed out after 15000 milliseconds   http_code=000
+
+The old public IP answers nothing on SSH. This corroborates the destroy; it is
+not the proof — an address can also be filtered or reassigned, and the proof is
+the TERMINATED instance OCID plus the empty audit in §6.
+
+Not evidence: `http://92.5.95.252:8085/health` also times out, but 8085 was never
+in the security list (only 22/6333/6334 were admitted), so that timeout would
+have happened on the live host too. It is recorded here only so the check is not
+mistaken for a passing test.
+
+--------------------------------------------------------------------------------
+8. SPEND RATE
+--------------------------------------------------------------------------------
+Resource counts imply no bill, but this record does not rest on the implication.
+The app's own signed Usage API client was queried for the tenancy:
+
+  source              live OCI Usage API (signed request, no CLI)
+  period              2025-12-01 .. 2026-11-18
+  COST records        1        total COST EUR 0.00
+  ALLCREDIT records   0        remaining_credit = null (not reported as 0)
+  wallet              spent_credit 0
+  balance_source      live_oci_spend_only
+  cloud_spend_rate_eur 0.00
+
+So the billable line items — the A2.Flex instance, its boot volume and the 200 GB
+balanced block volume — are not only gone from the inventory, they produced no
+billed cost in the window the API covers.
+
+Limits of that figure, stated rather than glossed:
+- the Usage API reports aggregated, billed cost; there is no per-hour or
+  per-resource attribution behind the 0.00;
+- usage and cost reports lag real time, so a handful of hours between the destroy
+  and the query could hide accrual that had not yet posted;
+- ALLCREDIT returned no records, so remaining trial credit is unknown (`null`),
+  not zero and not full;
+- the wallet records EUR 0.00 of OCI spend only; it is not a cross-cloud balance.
+
+--------------------------------------------------------------------------------
+9. WHAT WAS LOST, WHAT REMAINS
+--------------------------------------------------------------------------------
+Lost with the block volume, by design and with no backup taken:
+- the `rag_documents` collection (10 points, 384 dims, int8, HNSW m=16/ef=128);
+- the Stage 6 snapshot artefact that was retained on that volume
+  (`rag_documents-…-2026-11-18-15-23-52.snapshot`, 180,736 B) — the drill's
+  restore path no longer has a live artefact to re-run;
+- the host's `.env` (generated Qdrant key, mode 600) and the built image.
+
+The teardown was a retirement, not a pause, so no volume backup or snapshot
+export was requested. A future re-deploy rebuilds the collection from the
+committed corpus in ~1 minute and re-downloads the ~87 MB embedder weights into
+the local model cache.
+
+Local and gitignored, none of it billable:
+  terraform/terraform.tfstate             empty state, serial 13
+  terraform/terraform.tfstate.backup      pre-destroy serial 11
+  terraform/terraform.tfvars              OCI identifiers + operator /32
+  terraform/stage5.tfplan                 historical plan artefact
+  runtime/                                destroy plan, tfplan, apply log, drill data
+  .env, storage/                          local stack only, untouched by this stage
+
+This stage stopped and removed nothing locally: the local Compose stack and its
+`cloudguard-vector-model-cache` volume were out of scope and are unchanged.
+
+--------------------------------------------------------------------------------
+10. GIT BOUNDARY
+--------------------------------------------------------------------------------
+  staged in the teardown commit: docs/stage-9-teardown.txt and the README roadmap
+  and documentation links only
+
+  git check-ignore -> .env, terraform/terraform.tfvars, terraform.tfstate,
+                      *.tfplan, storage/, runtime/          all ignored
+  no state, tfvars, plan, log, snapshot, key or real OCID is tracked by this stage
+
+Evidence is cited by path, not copied into the tree: the destroy plan, the apply
+log and the audit state stay in gitignored `runtime/`. The identifiers the plan
+printed remain in `docs/stage-5-verification.txt` from the deployment record,
+which this stage does not alter.
+
+--------------------------------------------------------------------------------
+11. WHAT THIS RECORD DOES NOT PROVE
+--------------------------------------------------------------------------------
+- It is not a billing statement for any period after 2026-11-18. Zero live
+  resources is an inventory fact; EUR 0.00 is a Usage API reading for the stated
+  window only.
+- It does not attribute cost per project. The 0.00 is tenancy-wide.
+- It says nothing about AWS or GCP: those ports were never deployed, so there was
+  nothing to tear down and nothing is claimed about their spend.
+- It does not re-run the Stage 5 metrics. Those measurements describe a host that
+  existed; this stage cannot reproduce them without a new deployment.
+- It does not delete the empty `cloudguard` bucket (§6) or the terminated listing
+  records. Retention of those is intentional.
+- It does not verify the cloud-init template fix from Stage 5 by a fresh boot.
+  That rebuild (2 add / 2 destroy) is now the natural next deployment, not part
+  of this teardown.
+- The pre-teardown inventory line items are taken from the state refresh and the
+  Stage 5 record; no separate provider snapshot of the live host was archived
+  immediately before the destroy.
+
+--------------------------------------------------------------------------------
+12. REPRODUCE THE VERIFICATION (READ-ONLY)
+--------------------------------------------------------------------------------
+  cd projects/09-distributed-vector-embedding-lake/terraform
+
+  ../../../.cloudguard/tools/tofu/tofu.exe state list       # empty, exit 0
+  ../../../.cloudguard/tools/tofu/tofu.exe output           # "No outputs found"
+
+  # read the retained empty state without touching it
+  node -e "const fs=require('fs');const s=JSON.parse(fs.readFileSync('terraform.tfstate','utf8').replace(/^\ufeff/,''));console.log(s.serial,(s.resources||[]).length,Object.keys(s.outputs||{}).length)"
+  # -> 13 0 0
+
+  cd ../../10-multi-agent-local-llm-swarm/runtime/zero-cost-audit
+  ../../../../.cloudguard/tools/tofu/tofu.exe apply -auto-approve \
+    -var-file=values.tfvars                                 # 0 added/changed/destroyed
+  ../../../../.cloudguard/tools/tofu/tofu.exe output          # live_total = 0
+
+  curl -m 15 telnet://92.5.95.252:22                          # timeout, code 000
+
+Exit criteria: empty project state, `live_total = 0` with every category empty,
+terminated listings only, old IP unreachable, and the Usage API total at 0.00 for
+the covered window.
+
+================================================================================
+SIGN-OFF
+Teardown: PASS. 8 of 8 managed OCI resources destroyed in a single reviewed
+apply; project state empty at serial 13; tenancy-wide read-only audit reports
+live_total = 0 across 2 compartments and 15 categories with only TERMINATED /
+DETACHED history left; old public IP unreachable; OCI Usage API reports EUR 0.00
+for 2025-12-01..2026-11-18 and the wallet records 0.00 of spend. Recorded limits:
+the collection and its Stage 6 snapshot are gone by design, remaining trial credit
+is unknown, the empty `cloudguard` bucket was left in place, and no per-project
+cost attribution exists.
+================================================================================
